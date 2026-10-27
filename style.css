@@ -359,3 +359,248 @@ hr { border: 0; border-top: 1px solid var(--line); margin: 2px 0; width: 100%; }
   .sb-row { grid-template-columns: 26px 1fr auto; }
   .sb-edit { grid-column: 1 / -1; justify-content: flex-end; }
 }
+
+/* =========================================================================
+   РЕЖИМЫ, ОПРОС, ТАЙМЕР, ПРАЗДНИЧНЫЕ ЭФФЕКТЫ
+   ========================================================================= */
+:root {
+  --gold: #ffd166;
+  --gold-ink: #2a2000;
+}
+
+/* --- переключатель режима ------------------------------------------------- */
+.mode-card .card-head { margin-bottom: 10px; }
+#mode-desc { text-align: right; }
+.mode-tabs {
+  display: flex; gap: 4px; flex-wrap: wrap;
+  background: #0d1219; border: 1px solid var(--line);
+  border-radius: 12px; padding: 4px; margin-bottom: 14px;
+}
+.mode-tab {
+  flex: 1 1 120px; min-width: 0;
+  background: none; border: 1px solid transparent; color: var(--muted);
+  border-radius: 9px; padding: 8px 10px; font-size: 13px; font-weight: 600;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.mode-tab:hover { color: #dbe3ef; background: #141b26; }
+.mode-tab.active {
+  background: #1d2534; color: #fff; border-color: #2c374b;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.28);
+}
+.mode-body { display: flex; flex-direction: column; }
+.mode-body .field:last-of-type { margin-bottom: 8px; }
+
+/* --- варианты опроса ------------------------------------------------------ */
+.poll-options { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 10px; }
+.poll-opt { display: flex; gap: 8px; align-items: center; }
+.poll-opt input {
+  flex: 1 1 auto; min-width: 0;
+  background: #0d1219; border: 1px solid var(--line); color: var(--text);
+  border-radius: 9px; padding: 9px 12px; font: inherit;
+}
+.poll-opt input:focus { outline: none; border-color: var(--accent); }
+.icon-btn {
+  flex: 0 0 auto; width: 32px; height: 32px; border-radius: 9px;
+  background: #182031; border: 1px solid var(--line); color: #9fb0c7;
+  font-size: 17px; line-height: 1; display: grid; place-items: center; padding: 0;
+}
+.icon-btn:hover:not([disabled]) { border-color: var(--lose); color: #ff9aa4; }
+.icon-btn[disabled] { opacity: 0.35; cursor: not-allowed; }
+#poll-add { align-self: flex-start; }
+#poll-hint { margin: 10px 0 0; line-height: 1.55; }
+
+/* --- таймер --------------------------------------------------------------- */
+.timer-row {
+  display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap;
+  margin-top: 10px;
+}
+.timer-field { flex: 0 1 150px; margin-bottom: 0; }
+.timer-presets { display: flex; gap: 6px; flex-wrap: wrap; padding-bottom: 2px; }
+.timer-presets .ghost-btn { padding: 7px 10px; }
+#timer-hint { margin: 10px 0 0; line-height: 1.55; }
+
+.round-timer { margin-top: 14px; }
+.rt-row { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.rt-clock { font-size: 14px; }
+.rt-row b {
+  font-variant-numeric: tabular-nums; font-size: 20px; letter-spacing: 0.01em;
+  color: #fff;
+}
+.rt-note { font-size: 12px; color: var(--muted); }
+.rt-bar {
+  height: 6px; border-radius: 999px; overflow: hidden;
+  background: #0e131b; border: 1px solid var(--line); margin-top: 8px;
+}
+.rt-bar i {
+  display: block; height: 100%; width: 100%;
+  background: linear-gradient(90deg, var(--win), #9df0c2);
+  transition: width 0.5s linear;
+}
+.round-timer.warn .rt-row b { color: var(--lose); }
+.round-timer.warn .rt-bar i { background: linear-gradient(90deg, #ff8f6b, var(--lose)); }
+
+/* --- бейджи режима и вариантов -------------------------------------------- */
+.badge.mode {
+  color: #9fb0c7; background: #131a26; border-color: #2a3547;
+  letter-spacing: 0.04em;
+}
+.badge.tone {
+  color: var(--accent-ink); background: var(--tone, var(--accent));
+  border-color: var(--tone, var(--accent));
+}
+.badge.roll {
+  color: var(--gold-ink); background: var(--gold); border-color: var(--gold);
+}
+
+/* --- распределение голосов по вариантам ----------------------------------- */
+.vote-bar .seg { transition: width 0.4s ease; }
+.vote-counts { gap: 16px; row-gap: 4px; flex-wrap: wrap; font-size: 14px; }
+.vote-counts .vc { white-space: nowrap; }
+
+.btn.opt {
+  background: rgba(255, 255, 255, 0.03);
+  border-color: var(--opt, var(--line));
+  color: var(--opt, #dbe3ef);
+}
+.btn.opt:hover { background: rgba(255, 255, 255, 0.09); filter: none; }
+
+/* --- рулетка -------------------------------------------------------------- */
+.roll-btn {
+  background: linear-gradient(180deg, #ffe29a, #ffcc55);
+  color: var(--gold-ink); border-color: transparent;
+  box-shadow: 0 6px 18px -8px rgba(255, 209, 102, 0.9);
+}
+.roll-btn:hover { filter: brightness(1.06); }
+.roll-btn[disabled] { opacity: 0.6; cursor: progress; }
+.roll-stage {
+  margin: 16px 0 4px; padding: 18px 14px; border-radius: 14px;
+  border: 1px dashed rgba(255, 209, 102, 0.4);
+  background: radial-gradient(120% 140% at 50% 0%, rgba(255, 209, 102, 0.1), transparent 70%);
+  display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center;
+}
+.roll-slot {
+  min-width: 180px; max-width: 100%;
+  padding: 6px 20px; border-radius: 12px;
+  background: rgba(0, 0, 0, 0.28); border: 1px solid rgba(255, 209, 102, 0.3);
+  font-size: 30px; font-weight: 800; letter-spacing: -0.01em;
+  color: var(--gold); font-variant-numeric: tabular-nums;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.roll-slot.spinning { animation: slotPulse 0.22s ease-in-out infinite alternate; }
+@keyframes slotPulse {
+  from { transform: scale(0.985); filter: blur(0.2px); opacity: 0.86; }
+  to { transform: scale(1.015); filter: blur(0); opacity: 1; }
+}
+
+.result-banner {
+  margin-top: 14px; padding: 16px 18px; border-radius: 14px;
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  text-align: center; border: 1px solid var(--tone, var(--line));
+  background: radial-gradient(120% 130% at 50% 0%, rgba(255, 255, 255, 0.06), transparent 70%);
+  position: relative; z-index: 1;
+}
+.result-banner.roll {
+  background: radial-gradient(120% 130% at 50% 0%, rgba(255, 209, 102, 0.14), transparent 70%);
+}
+.result-kicker {
+  font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: #a9b6c9;
+}
+.result-name {
+  font-size: 30px; font-weight: 800; line-height: 1.2;
+  color: var(--tone, var(--gold)); word-break: break-word;
+}
+.result-note { font-size: 12.5px; color: var(--muted); }
+
+.voter.winner {
+  border-color: var(--gold); color: var(--gold);
+  background: rgba(255, 209, 102, 0.12);
+}
+
+/* --- мелкие правки чата и полей ------------------------------------------- */
+.msg.vote-counted { background: rgba(255, 255, 255, 0.03); }
+input.invalid, .field input.invalid {
+  border-color: rgba(255, 92, 108, 0.75);
+  box-shadow: 0 0 0 2px rgba(255, 92, 108, 0.14);
+}
+
+/* --- «зрелищность» победы/поражения (без звука) --------------------------- */
+.round-card.reveal { animation: cardReveal 0.9s ease-out; }
+.round-card.reveal::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(140% 120% at 50% -10%, var(--reveal, var(--win)) 0%, transparent 62%);
+  opacity: 0; animation: revealFlash 1.3s ease-out;
+}
+@keyframes cardReveal {
+  0% { transform: scale(1); }
+  16% { transform: scale(1.008); }
+  100% { transform: scale(1); }
+}
+@keyframes revealFlash {
+  0% { opacity: 0; }
+  16% { opacity: 0.2; }
+  100% { opacity: 0; }
+}
+
+.burst { position: absolute; left: 50%; top: 46%; width: 0; height: 0; pointer-events: none; z-index: 2; }
+.burst i {
+  position: absolute; left: 0; top: 0; width: 7px; height: 7px; border-radius: 2px;
+  background: var(--reveal, var(--win)); opacity: 0;
+  animation: spark var(--dur, 0.8s) cubic-bezier(0.2, 0.7, 0.3, 1) var(--delay, 0s) forwards;
+}
+@keyframes spark {
+  0% { opacity: 0; transform: translate(-50%, -50%) scale(0.4) rotate(0deg); }
+  18% { opacity: 1; }
+  100% {
+    opacity: 0;
+    transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy))) scale(1)
+      rotate(var(--rot, 90deg));
+  }
+}
+
+.sb-row.flash { animation: rowFlash 1.6s ease-out; }
+@keyframes rowFlash {
+  0% { box-shadow: inset 0 0 0 2px var(--win), 0 0 26px -8px var(--win); }
+  100% { box-shadow: inset 0 0 0 0 transparent, 0 0 0 0 transparent; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .round-card.reveal,
+  .round-card.reveal::after,
+  .sb-row.flash,
+  .roll-slot.spinning,
+  .badge.live { animation: none; }
+  .burst { display: none; }
+  .vote-bar .seg, .rt-bar i { transition: none; }
+}
+
+/* подпись над кнопками объявления итога в опросе */
+.controls-label {
+  flex: 1 1 100%; font-size: 12px; color: var(--muted);
+  letter-spacing: 0.02em; margin-bottom: -2px;
+}
+.round-title { flex-wrap: wrap; }
+
+/* выравнивание блоков в карточке настроек раунда */
+.mode-card hr { margin: 14px 0; }
+.hist-row .badge {
+  max-width: 180px; display: inline-block; overflow: hidden;
+  text-overflow: ellipsis; vertical-align: middle;
+}
+.roll-slot { font-size: clamp(20px, 6vw, 30px); }
+
+@media (max-width: 560px) {
+  .mode-tab { font-size: 12.5px; padding: 7px 6px; flex-basis: 96px; }
+  .vote-counts { gap: 10px; font-size: 13px; }
+  .timer-field { flex-basis: 120px; }
+  .result-name { font-size: 24px; }
+}
+
+/* итог раунда появляется с лёгким «прыжком» */
+.round-card.reveal .result-banner { animation: bannerIn 0.55s cubic-bezier(0.2, 1.2, 0.4, 1); }
+@keyframes bannerIn {
+  from { transform: translateY(10px) scale(0.97); opacity: 0; }
+  to { transform: none; opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .round-card.reveal .result-banner { animation: none; }
+}
