@@ -51,14 +51,17 @@ const EDGE_RE = /^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu; // пунктуация п�
 const LETTER_RE = /\p{L}/u;
 
 /** разбивает строку на «символы» так, чтобы эмодзи не рвались на половинки */
+let graphemeSegmenter = null;
 function symbolClusters(text) {
-  if (typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function') {
+  if (graphemeSegmenter === null && typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function') {
     try {
-      const seg = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
-      return Array.from(seg.segment(text), (part) => part.segment);
+      graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
     } catch (e) {
-      /* старый браузер — читаем по код-поинтам */
+      graphemeSegmenter = false; // старый браузер — читаем по код-поинтам
     }
+  }
+  if (graphemeSegmenter) {
+    return Array.from(graphemeSegmenter.segment(text), (part) => part.segment);
   }
   return Array.from(text);
 }
