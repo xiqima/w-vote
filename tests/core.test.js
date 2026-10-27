@@ -208,6 +208,51 @@ function reply(body, status = 200) {
       eq(loaded.rounds[0].decidedAt, '2026-10-27T18:10:00.000Z');
       eq(loaded.rounds[0].closedAt, undefined);
     });
+    await check('настройки режимов: значения по умолчанию и перенос старых данных', () => {
+      const fresh = WV.emptyState();
+      eq(fresh.settings.mode, 'winlose');
+      eq(fresh.settings.roundSeconds, 0);
+      eq(fresh.settings.wheel.words, ['+']);
+      eq(WV.normalizeMode('wheel'), 'wheel');
+      eq(WV.normalizeMode('что-то'), 'winlose');
+      eq(WV.roundMode({}), 'winlose');
+      eq(WV.roundMode({ mode: 'poll' }), 'poll');
+
+      // мусор в сохранённых настройках не ломает сайт
+      const shared = new Map([
+        [
+          'k',
+          JSON.stringify({
+            settings: { mode: 'nonsense', wheel: { words: [] }, poll: { options: ['один'] }, roundSeconds: 3 },
+            rounds: [{ index: 1, openedAt: '2026-10-27T18:00:00.000Z', outcome: 'win', votes: [] }],
+          }),
+        ],
+      ]);
+      const { WV: byKey } = loadCore(null, shared);
+      const st = byKey.loadState('k');
+      eq(st.settings.mode, 'winlose');
+      eq(st.settings.wheel.words, ['+']);
+      eq(st.settings.poll.options, ['да', 'нет']);
+      eq(st.settings.roundSeconds, 10, 'слишком короткий таймер поднимается до 10 с');
+      // старый раунд без режима читается как победа/поражение
+      eq(st.rounds[0].mode, 'winlose');
+      eq(st.rounds[0].durationSec, 0);
+      eq(st.rounds[0].winner, null);
+    });
+    await check('колесо: билеты, вход по слову и веса', () => {
+      eq(WV.entryWords({}), ['+']);
+      eq(WV.entryWords({ entries: ['я', 'участвую'] }), ['я', 'участвую']);
+      eq(WV.isEntry(' + ', { entries: ['+'] }), true);
+      eq(WV.isEntry('плюс', { entries: ['+'] }), false);
+      const votes = [
+        { userId: 'u1', nickname: 'a', votes: 3 },
+        { userId: 'u2', nickname: 'b', votes: 1 },
+      ];
+      eq(WV.wheelTickets(votes, false).length, 2);
+      eq(WV.wheelTickets(votes, true).map((t) => t.nickname), ['a', 'a', 'a', 'b']);
+      eq(WV.pollOptions({}), ['да', 'нет']);
+      eq(WV.pollOptions({ options: ['да', 'нет', 'может'] }), ['да', 'нет', 'может']);
+    });
     await check('пустое хранилище даёт состояние по умолчанию', () => {
       const st = WV.loadState('нет-такого-ключа');
       eq(st.version, 2);

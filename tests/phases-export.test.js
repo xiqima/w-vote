@@ -111,7 +111,9 @@ check('лист «Лидеры»: шапка и строки по очкам', (
 check('лист «Раунды»: голоса по словам и исход', () => {
   const rows = WV.exportRoundsRows(rounds, { win: ['win'], lose: ['lose'] });
   eq(rows[0].slice(0, 3), ['№', 'Начало', 'Голоса до']);
-  eq(rows[1].slice(4), [2, 1, 3, 2]); // win / lose / всего / угадали
+  eq(rows[1].slice(4, 8), [2, 1, 3, 2]); // win / lose / всего / угадали
+  eq(rows[1][8], 'победа/поражение'); // режим
+  eq(rows[1].length, rows[0].length, 'ширина строк не совпадает с шапкой');
   eq(rows[2][3], 'не объявлен');
 });
 check('CSV: BOM, «;» и экранирование кавычек', () => {
@@ -181,6 +183,90 @@ check('zip: корректные записи центрального ката�
   const cdOffset = buf.readUInt32LE(eocd + 16);
   assert(cdOffset + cdSize <= eocd, 'центральный каталог выходит за файл');
   assert(buf.slice(cdOffset, cdOffset + 4).equals(Buffer.from([0x50, 0x4b, 0x01, 0x02])), 'плохая сигнатура каталога');
+});
+
+console.log('\nрежимы: колесо и опрос');
+check('tallyVotes: колесо берёт только тех, кто написал слово-вход', () => {
+  const r = {
+    mode: 'wheel',
+    entries: ['+'],
+    openedAt: T(0),
+    votesClosedAt: null,
+    ownerUserId: 'owner',
+  };
+  const votes = WV.tallyVotes(
+    [
+      { id: '1', ts: T(1), userId: 'u1', nickname: 'a', content: '+' },
+      { id: '2', ts: T(2), userId: 'u2', nickname: 'b', content: '+' },
+      { id: '3', ts: T(3), userId: 'u3', nickname: 'c', content: 'привет' },
+      { id: '4', ts: T(4), userId: 'owner', nickname: 'o', content: '+' },
+    ],
+    r
+  );
+  eq(votes.map((v) => v.nickname), ['b', 'a']);
+  eq(votes[0].vote, '+');
+});
+check('tallyVotes: опрос понимает вариант словом и номером', () => {
+  const r = { mode: 'poll', options: ['да', 'нет'], openedAt: T(0), votesClosedAt: null };
+  const votes = WV.tallyVotes(
+    [
+      { id: '1', ts: T(1), userId: 'u1', nickname: 'a', content: 'ДА' },
+      { id: '2', ts: T(2), userId: 'u2', nickname: 'b', content: '2' },
+      { id: '3', ts: T(3), userId: 'u3', nickname: 'c', content: '3' },
+      { id: '4', ts: T(4), userId: 'u4', nickname: 'd', content: 'ага' },
+    ],
+    r
+  );
+  eq(votes.map((v) => v.vote), [1, 0]);
+  eq(WV.detectOption('2', ['да', 'нет']), 1);
+  eq(WV.detectOption('нет!', ['да', 'нет']), 1);
+  eq(WV.detectOption('3', ['да', 'нет']), -1);
+});
+check('pickWinner: одинаковый seed — одинаковый победитель', () => {
+  const list = [{ userId: 'u1', nickname: 'a' }, { userId: 'u2', nickname: 'b' }];
+  eq(WV.pickWinner(list, 'round:1'), WV.pickWinner(list, 'round:1'));
+  eq(WV.pickWinner([], 'x'), null);
+  // разные seed — победитель бывает разный (не всегда один и тот же)
+  const seen = new Set();
+  for (let i = 0; i < 30; i++) seen.add(WV.pickWinner(list, 'round:' + i).nickname);
+  eq([...seen].sort(), ['a', 'b']);
+});
+check('computeScores: в колесе очко только победителю, опрос не даёт очков', () => {
+  const wheelRounds = [
+    {
+      index: 1,
+      mode: 'wheel',
+      outcome: 'wheel',
+      winner: { userId: 'u2', nickname: 'b' },
+      votes: [
+        { userId: 'u1', nickname: 'a', vote: '+' },
+        { userId: 'u2', nickname: 'b', vote: '+' },
+      ],
+    },
+    { index: 2, mode: 'poll', outcome: 'poll', votes: [{ userId: 'u1', nickname: 'a', vote: 0 }] },
+  ];
+  const scores = WV.computeScores(wheelRounds);
+  eq(scores.map((p) => [p.nickname, p.points]), [['b', 1], ['a', 0]]);
+});
+check('roundDeadline / roundRemaining работают, 0 — без таймера', () => {
+  const r = { openedAt: T(0), durationSec: 60 };
+  eq(WV.roundDeadline(r), T(1));
+  eq(WV.roundRemaining(r, new Date(T(0)).getTime()), 60);
+  eq(WV.roundRemaining(r, new Date(T(2)).getTime()), 0);
+  eq(WV.roundDeadline({ openedAt: T(0), durationSec: 0 }), null);
+  eq(WV.clockText(65), '1:05');
+  eq(WV.clockText(0), '0:00');
+});
+check('экспорт раундов: колесо и опрос попадают в отдельные строки', () => {
+  const rows = WV.exportRoundsRows([
+    { index: 1, mode: 'wheel', openedAt: T(0), votesClosedAt: T(5), outcome: 'wheel', winner: { userId: 'u2', nickname: 'dyson' }, votes: [{ userId: 'u1', nickname: 'a', vote: '+' }, { userId: 'u2', nickname: 'dyson', vote: '+' }] },
+    { index: 2, mode: 'poll', question: 'Что дальше?', options: ['да', 'нет'], openedAt: T(10), votesClosedAt: T(20), outcome: 'poll', votes: [{ userId: 'u1', nickname: 'a', vote: 0 }, { userId: 'u2', nickname: 'b', vote: 0 }, { userId: 'u3', nickname: 'c', vote: 1 }] },
+  ]);
+  eq(rows[1][8], 'колесо');
+  assert(/dyson/.test(rows[1][9]), 'нет победителя колеса');
+  eq(rows[2][8], 'опрос');
+  assert(/да: 2; нет: 1/.test(rows[2][9]), 'нет результатов опроса: ' + rows[2][9]);
+  eq(rows.every((r) => r.length === rows[0].length), true, 'разная ширина строк');
 });
 
 queue.then(() => {

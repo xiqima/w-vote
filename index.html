@@ -19,6 +19,11 @@
           Сайт считает голоса, а после раунда начисляет очко тем, кто угадал исход.
           Подходит для любого стрима: игра, турнир, челлендж, ставки на результат.
         </p>
+        <p class="lead">
+          Режимы: <b>победа / поражение</b> с очками и таблицей лидеров,
+          <b>колесо удачи</b> (ник выпадает случайно из тех, кто написал слово-вход — «+»)
+          и <b>опрос</b> с вариантами ответа. Таймер раунда — по желанию.
+        </p>
 
         <form id="channel-form" class="channel-form" autocomplete="off">
           <input id="channel-input" type="text" placeholder="https://w.tv/твой_ник" spellcheck="false" />
@@ -158,13 +163,13 @@
         <section class="col-main">
           <div id="round-card" class="card round-card"></div>
 
-          <div class="card">
+          <div class="card" id="scoreboard-card">
             <div class="card-head">
-              <h2>Таблица лидеров</h2>
+              <h2 id="scoreboard-title">Таблица лидеров</h2>
               <div id="stats-line" class="muted small"></div>
             </div>
             <div id="scoreboard" class="scoreboard"></div>
-            <div class="board-foot">
+            <div class="board-foot" id="scoreboard-foot">
               <button id="add-player" class="ghost-btn">+ добавить ник вручную</button>
               <span class="muted small">очки можно править кнопками − / + или нажав на число</span>
             </div>
@@ -181,15 +186,33 @@
 
         <!-- ---------------- правая колонка ---------------- -->
         <section class="col-side">
-          <div class="card chat-card">
+          <div class="card mode-card">
             <div class="card-head">
-              <h2>Чат</h2>
-              <span id="chat-status" class="muted small"></span>
+              <h2>Режим</h2>
+              <span class="muted small" id="mode-note"></span>
             </div>
-            <div id="chat" class="chat"></div>
+            <div class="mode-tabs" role="tablist">
+              <button type="button" role="tab" data-mode-tab="winlose">🏆 Победа / поражение</button>
+              <button type="button" role="tab" data-mode-tab="wheel">🎡 Колесо удачи</button>
+              <button type="button" role="tab" data-mode-tab="poll">📊 Опрос</button>
+            </div>
+            <p class="muted small" id="mode-hint"></p>
+            <div class="timer-box">
+              <label class="switch">
+                <input type="checkbox" id="timer-toggle" />
+                <span>Ограничивать раунд по времени</span>
+              </label>
+              <label class="field field-inline" id="timer-seconds-field">
+                <span>Секунд на раунд</span>
+                <input id="timer-seconds" type="number" min="10" max="3600" step="5" value="60" />
+              </label>
+              <p class="muted small" id="timer-hint">
+                Опционально: когда время выйдет, приём голосов остановится сам — останется объявить исход.
+              </p>
+            </div>
           </div>
 
-          <div class="card">
+          <div class="card" id="card-winlose">
             <div class="card-head"><h2>Слова-голоса</h2></div>
             <label class="field">
               <span>Голос за победу (через запятую)</span>
@@ -208,6 +231,54 @@
               Фраза «я за win» голосом не считается.
               Голосом может быть и символ, и эмодзи: <b>+</b>, <b>🔥</b>, <b>!</b> — повтор подряд (<b>+++</b>) считается тем же голосом.
             </p>
+          </div>
+
+          <div class="card" id="card-wheel" hidden>
+            <div class="card-head"><h2>Колесо удачи</h2></div>
+            <label class="field">
+              <span>Слова-входы (через запятую)</span>
+              <input id="wheel-words" type="text" placeholder="+" spellcheck="false" />
+            </label>
+            <label class="switch">
+              <input type="checkbox" id="wheel-weighted-toggle" />
+              <span>Каждое сообщение — отдельный билет (кто писал чаще, у того больше шансов)</span>
+            </label>
+            <p class="muted small">
+              Кто написал слово-вход в чат — тот участвует в розыгрыше. Колесо выбирает ника случайно,
+              победитель получает очко в таблице лидеров. Подходит для «+» в чате, розыгрыша ролей,
+              выбора того, кто идёт играть, и всего, где нужен честный рандом из зрителей.
+            </p>
+            <p class="muted small">
+              Если стример (ты) тоже напишет слово — тебя в розыгрыш не добавят.
+            </p>
+          </div>
+
+          <div class="card" id="card-poll" hidden>
+            <div class="card-head"><h2>Опрос</h2></div>
+            <label class="field">
+              <span>Вопрос</span>
+              <input id="poll-question" type="text" placeholder="Что играем дальше?" />
+            </label>
+            <label class="field">
+              <span>Варианты (через запятую, от 2 до 8)</span>
+              <input id="poll-options" type="text" placeholder="да, нет" spellcheck="false" />
+            </label>
+            <label class="switch">
+              <input type="checkbox" id="poll-revote-toggle" />
+              <span>Разрешить переголосовать (считается последний вариант зрителя)</span>
+            </label>
+            <p class="muted small">
+              Голос — сообщение целиком, равное варианту: <b>да</b>, <b>нет</b>. Можно и номером:
+              <b>1</b>, <b>2</b>. Вопрос и варианты видны в подсказке под текущим раундом.
+            </p>
+          </div>
+
+          <div class="card chat-card">
+            <div class="card-head">
+              <h2>Чат</h2>
+              <span id="chat-status" class="muted small"></span>
+            </div>
+            <div id="chat" class="chat"></div>
           </div>
 
           <details class="card settings-card">
@@ -261,15 +332,7 @@
 
           <div class="card rules-card">
             <div class="card-head"><h2>Как это работает</h2></div>
-            <ol class="rules">
-              <li><b>«Начать голосование»</b> — сообщения начинают считаться (например, пока идёт выбор героев).</li>
-              <li><b>«Остановить приём голосов»</b> — когда матч начался: голоса фиксируются, новые не считаются.</li>
-              <li>Матч закончился — жмёшь <b class="win">Была победа</b> или <b class="lose">Было поражение</b>.</li>
-              <li>Угадавшим +1 очко. Очки можно править вручную в любой момент.</li>
-            </ol>
-            <p class="muted small">
-              Передумал останавливать? Нажми «Возобновить приём голосов» — голоса снова пойдут.
-            </p>
+            <div id="rules-body"></div>
             <p class="muted small">
               Слова-голоса можно писать в любом виде: <b>win</b>, <b>WIN!</b>, <b>:win:</b> —
               и в чате, и в поле настроек. Очки и настройки хранятся только у тебя в браузере:
