@@ -28,10 +28,6 @@
 
         <div id="landing-error" class="error" hidden></div>
 
-        <div class="landing-actions">
-          <button id="demo-btn" class="ghost-btn">Посмотреть демо без своего канала</button>
-        </div>
-
         <div class="landing-foot">
           <span class="pill">без регистрации и паролей</span>
           <span class="pill">данные остаются в твоём браузере</span>
@@ -120,8 +116,17 @@
           <details class="card settings-card">
             <summary>Данные и подключение</summary>
             <div class="settings-body">
+              <span class="field-label">Выгрузить итоговую таблицу</span>
               <div class="row">
-                <button id="export-btn" class="ghost-btn">Скачать резервную копию</button>
+                <button id="export-xlsx" class="ghost-btn">Excel (.xlsx)</button>
+                <button id="export-csv" class="ghost-btn">CSV</button>
+                <button id="export-txt" class="ghost-btn">TXT</button>
+                <button id="export-copy" class="ghost-btn">Копировать текстом</button>
+              </div>
+              <hr />
+              <span class="field-label">Резервная копия (для переноса на другое устройство)</span>
+              <div class="row">
+                <button id="export-btn" class="ghost-btn">Скачать копию</button>
                 <button id="import-btn" class="ghost-btn">Загрузить копию</button>
                 <button id="reset-all" class="ghost-btn danger">Сбросить всё</button>
               </div>
@@ -146,11 +151,14 @@
           <div class="card rules-card">
             <div class="card-head"><h2>Как это работает</h2></div>
             <ol class="rules">
-              <li>Жмёшь <b>«Начать голосование»</b> — с этой секунды сообщения считаются.</li>
-              <li>Зрители пишут слово-голос в чат. Видно, чей голос учтён, а чей нет.</li>
-              <li>Раунд закончился — жмёшь <b class="win">Победа</b> или <b class="lose">Поражение</b>.</li>
+              <li><b>«Начать голосование»</b> — сообщения начинают считаться (например, пока идёт выбор героев).</li>
+              <li><b>«Остановить приём голосов»</b> — когда матч начался: голоса фиксируются, новые не считаются.</li>
+              <li>Матч закончился — жмёшь <b class="win">Была победа</b> или <b class="lose">Было поражение</b>.</li>
               <li>Угадавшим +1 очко. Очки можно править вручную в любой момент.</li>
             </ol>
+            <p class="muted small">
+              Передумал останавливать? Нажми «Возобновить приём голосов» — голоса снова пойдут.
+            </p>
             <p class="muted small">
               Очки и настройки хранятся только у тебя в браузере: если открыть сайт на другом
               устройстве, таблица будет своя. Сделай резервную копию, чтобы перенести.

@@ -98,8 +98,10 @@ button { font: inherit; cursor: pointer; }
 .channel { display: flex; align-items: center; gap: 10px; text-decoration: none; color: inherit; min-width: 0; }
 .avatar {
   width: 38px; height: 38px; border-radius: 50%;
-  background: var(--panel-2) center/cover no-repeat;
-  border: 1px solid var(--line); display: inline-block; flex: 0 0 auto;
+  background: #1d2534 center/cover no-repeat;
+  border: 1px solid var(--line); flex: 0 0 auto;
+  display: inline-grid; place-items: center;
+  font-weight: 800; font-size: 16px; color: #cbd5e4; overflow: hidden;
 }
 .channel-meta { display: flex; flex-direction: column; line-height: 1.25; min-width: 0; }
 .channel-name { font-weight: 700; }
@@ -139,6 +141,7 @@ button { font: inherit; cursor: pointer; }
 /* ------------------------- текущий раунд ------------------------- */
 .round-card { position: relative; overflow: hidden; }
 .round-card.open { border-color: rgba(249, 158, 26, 0.55); box-shadow: 0 0 0 1px rgba(249, 158, 26, 0.2), var(--shadow); }
+.round-card.awaiting { border-color: rgba(255, 209, 102, 0.5); box-shadow: 0 0 0 1px rgba(255, 209, 102, 0.16), var(--shadow); }
 .round-top { display: flex; justify-content: space-between; align-items: center; gap: 14px; flex-wrap: wrap; }
 .round-title { display: flex; align-items: center; gap: 10px; font-size: 20px; font-weight: 750; }
 .badge {
@@ -220,9 +223,10 @@ button { font: inherit; cursor: pointer; }
 /* ------------------------- история ------------------------- */
 .history { display: flex; flex-direction: column; gap: 4px; max-height: 320px; overflow: auto; }
 .hist-row {
-  display: grid; grid-template-columns: 42px 92px 1fr auto; gap: 10px; align-items: center;
-  padding: 7px 9px; border-radius: 8px; background: #121822; font-size: 13px;
+  display: grid; grid-template-columns: 38px minmax(96px, max-content) 1fr auto; gap: 10px;
+  align-items: center; padding: 7px 9px; border-radius: 8px; background: #121822; font-size: 13px;
 }
+.hist-row .badge { font-size: 10.5px; padding: 3px 8px; }
 .hist-row .idx { color: var(--muted); }
 .hist-bar { height: 7px; border-radius: 999px; background: #0e131b; overflow: hidden; display: flex; }
 .hist-bar i { display: block; height: 100%; }
@@ -243,8 +247,8 @@ button { font: inherit; cursor: pointer; }
   font-size: 10px; padding: 1px 6px; border-radius: 999px; margin-left: 6px;
   border: 1px solid currentColor; vertical-align: middle; white-space: nowrap;
 }
-.msg .tag.w { color: var(--win); }
-.msg .tag.l { color: var(--lose); }
+.msg .tag.counted { color: var(--win); }
+.msg .tag.ignored { color: var(--lose); }
 .msg .tag.owner { color: var(--accent); }
 
 /* ------------------------- поля настроек ------------------------- */
@@ -262,6 +266,7 @@ button { font: inherit; cursor: pointer; }
 }
 .settings-body { margin-top: 14px; display: flex; flex-direction: column; gap: 12px; }
 .row { display: flex; gap: 8px; flex-wrap: wrap; }
+.field-label { display: block; font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: #93a1b8; }
 hr { border: 0; border-top: 1px solid var(--line); margin: 2px 0; width: 100%; }
 .rules { margin: 0; padding-left: 20px; color: #c3ccdb; font-size: 13.5px; line-height: 1.6; }
 .rules li { margin-bottom: 6px; }

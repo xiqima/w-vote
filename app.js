@@ -5,8 +5,9 @@
 'use strict';
 const {
   DEFAULT_WORDS, STORAGE_KEY, colorFor, computeScores, dateTimeOf, detectVote, emptyState, esc,
-  fetchMessages, fetchProfile, loadState, normalizeChannelInput, parseWords, plural,
-  resetProxyOrder, saveState, tallyVotes, timeOf, uid, wordsToText,
+  exportLeadersRows, exportRoundsRows, fetchAvatar, fetchMessages, fetchProfile, loadState,
+  makeCsv, makeTxt, makeXlsx, normalizeChannelInput, parseWords, plural, resetProxyOrder,
+  roundPhase, saveState, tallyVotes, timeOf, uid, votesEnd, wordsToText,
 } = window.WVote;
 
 const $ = (id) => document.getElementById(id);
@@ -27,7 +28,16 @@ const isDemo = () => app.channel === 'demo';
 // свой прокси: из настроек страницы, иначе из config.js
 const proxyOf = (state) => (state?.settings?.proxy || window.WTV_DEFAULT_PROXY || '').trim();
 const storageKey = () => `${STORAGE_KEY}:${app.channel || 'default'}`;
-const openRound = () => (app.state.rounds || []).find((r) => !r.closedAt) || null;
+// «текущий» раунд — тот, у которого ещё нет исхода (голосование или ожидание итога)
+const openRound = () => (app.state.rounds || []).find((r) => !r.outcome) || null;
+const votingRound = () => {
+  const r = openRound();
+  return r && roundPhase(r) === 'voting' ? r : null;
+};
+const awaitingRound = () => {
+  const r = openRound();
+  return r && roundPhase(r) === 'awaiting' ? r : null;
+};
 const words = () => app.state.settings.words || DEFAULT_WORDS;
 
 function persist() {
@@ -48,6 +58,17 @@ async function connect(rawInput) {
   app.state.channelUserId = profile.userId;
   app.state.channelName = profile.nickname;
   app.state.demo = false;
+  if (app.state.avatarFor !== profile.userId) {
+    app.state.avatarFor = profile.userId;
+    app.state.avatarUrl = null;
+    persist();
+    fetchAvatar(profile.userId, proxyOf(app.state)).then((url) => {
+      if (!url || !app.state || app.state.avatarFor !== profile.userId) return;
+      app.state.avatarUrl = url;
+      persist();
+      renderHeader();
+    });
+  }
   localStorage.setItem(LAST_CHANNEL_KEY, app.channel);
   const url = new URL(location.href);
   url.searchParams.set('c', profile.nickname);
@@ -215,14 +236,15 @@ function stopPolling() {
 // ---------------------------------------------------------------------------
 function startRound() {
   const s = app.state;
-  if (openRound()) return toast('Голосование уже идёт', true);
+  if (openRound()) return toast('Сначала заверши текущий раунд', true);
   const index = s.rounds.reduce((max, r) => Math.max(max, r.index || 0), 0) + 1;
   s.rounds.push({
     id: uid(),
     index,
     openedAt: new Date().toISOString(),
-    closedAt: null,
+    votesClosedAt: null,
     outcome: null,
+    decidedAt: null,
     allowRevote: !!s.settings.allowRevote,
     words: { win: [...words().win], lose: [...words().lose] },
     votes: [],
@@ -230,15 +252,43 @@ function startRound() {
   });
   persist();
   render();
-  toast(`Голосование №${index} началось — зрители могут писать в чат`);
+  toast(`Раунд №${index}: приём голосов начат — зрители могут писать в чат`);
+}
+
+/** остановить приём голосов и зафиксировать, кто что написал */
+function stopVoting() {
+  const round = votingRound();
+  if (!round) return toast('Приём голосов уже остановлен', true);
+  round.votesClosedAt = new Date().toISOString();
+  round.votes = tallyVotes(app.state.messages, round);
+  persist();
+  render();
+  const win = round.votes.filter((v) => v.vote === 'win').length;
+  const lose = round.votes.filter((v) => v.vote === 'lose').length;
+  toast(`Приём голосов остановлен: ${round.words.win[0]} — ${win}, ${round.words.lose[0]} — ${lose}. Ждём исход матча.`);
+}
+
+/** вернуть приём голосов, если поспешил */
+function resumeVoting() {
+  const round = awaitingRound();
+  if (!round) return;
+  round.votesClosedAt = null;
+  round.votes = [];
+  persist();
+  render();
+  toast('Приём голосов снова открыт');
 }
 
 function finishRound(outcome) {
   const round = openRound();
-  if (!round) return toast('Голосование не запущено', true);
-  round.closedAt = new Date().toISOString();
+  if (!round) return toast('Нет активного раунда', true);
+  if (!round.votesClosedAt) {
+    // если ещё не остановили приём — останавливаем и сразу объявляем исход
+    round.votesClosedAt = new Date().toISOString();
+    round.votes = tallyVotes(app.state.messages, round);
+  }
   round.outcome = outcome;
-  round.votes = tallyVotes(app.state.messages, round);
+  round.decidedAt = new Date().toISOString();
   const guessed = round.votes.filter((v) => v.vote === outcome).length;
   persist();
   render();
@@ -251,15 +301,18 @@ function finishRound(outcome) {
 function cancelRound() {
   const round = openRound();
   if (!round) return;
-  if (!confirm(`Отменить голосование №${round.index}? Голоса этого раунда не будут засчитаны.`)) return;
+  const what = roundPhase(round) === 'voting' ? 'голосование' : 'раунд';
+  if (!confirm(`Отменить ${what} №${round.index}? Голоса этого раунда не будут засчитаны.`)) return;
   app.state.rounds = app.state.rounds.filter((r) => r.id !== round.id);
   persist();
   render();
 }
 
+/** голоса текущего раунда: у открытого считаем на лету, у закрытого берём зафиксированные */
 function liveVotes() {
   const round = openRound();
   if (!round) return [];
+  if (roundPhase(round) === 'awaiting') return round.votes || [];
   return tallyVotes(app.state.messages, round);
 }
 
@@ -268,7 +321,8 @@ function liveVotes() {
 // ---------------------------------------------------------------------------
 function scoreboard() {
   const s = app.state;
-  const live = liveVotes();
+  const voting = roundPhase(openRound()) === 'voting';
+  const live = voting ? liveVotes() : [];
   const extra = [
     ...(s.extraPlayers || []),
     ...live.map((v) => ({ userId: v.userId, nickname: v.nickname })),
@@ -338,11 +392,29 @@ function render() {
   renderStatus();
 }
 
+function paintAvatar() {
+  const av = $('channel-avatar');
+  const s = app.state;
+  const name = s.demo ? 'Д' : s.channelName || s.channel || '?';
+  av.style.backgroundImage = '';
+  av.textContent = (name[0] || '?').toUpperCase();
+  const url = s.avatarUrl;
+  if (!url) return;
+  const probe = new Image();
+  probe.onload = () => {
+    if (app.state && app.state.avatarUrl === url) {
+      av.style.backgroundImage = `url("${url}")`;
+      av.textContent = '';
+    }
+  };
+  probe.src = url;
+}
+
 function renderHeader() {
   const s = app.state;
   $('channel-name').textContent = s.demo ? 'Демо-режим' : s.channelName || s.channel;
   $('channel-link').href = s.demo ? '#' : `https://w.tv/${s.channelName || s.channel}`;
-  $('channel-avatar').style.backgroundImage = '';
+  paintAvatar();
   const fin = s.rounds.filter((r) => r.outcome);
   const players = scoreboard();
   const liveCount = liveVotes().length;
@@ -374,23 +446,41 @@ function renderRound() {
   const card = $('round-card');
   const s = app.state;
   const round = openRound();
+  const phase = roundPhase(round);
   const lastFinished = [...s.rounds].reverse().find((r) => r.outcome);
-  card.classList.toggle('open', !!round);
+  card.classList.toggle('open', phase === 'voting');
+  card.classList.toggle('awaiting', phase === 'awaiting');
 
-  if (round) {
+  if (phase === 'voting' || phase === 'awaiting') {
     const votes = liveVotes();
     const w = votes.filter((v) => v.vote === 'win').length;
     const l = votes.filter((v) => v.vote === 'lose').length;
     const total = w + l;
     const pw = total ? (w / total) * 100 : 0;
+    const badge =
+      phase === 'voting'
+        ? '<span class="badge live">приём голосов</span>'
+        : '<span class="badge await">приём остановлен</span>';
+    const sub =
+      phase === 'voting'
+        ? `с ${timeOf(round.openedAt)} · ${round.allowRevote ? 'можно переголосовать' : 'считается первое слово'} ·
+           слова: ${esc(round.words.win.join(' / '))} и ${esc(round.words.lose.join(' / '))}`
+        : `голоса приняты до ${timeOf(round.votesClosedAt)} · ${total} ${plural(total, 'голос', 'голоса', 'голосов')} ·
+           теперь ждём конца матча и объявляем исход`;
+    const controls =
+      phase === 'voting'
+        ? `<button class="btn primary" data-act="stop">⏸ Остановить приём голосов</button>
+           <button class="btn" data-act="cancel">Отменить раунд</button>`
+        : `<button class="btn win" data-act="finish" data-outcome="win">🏆 Была победа</button>
+           <button class="btn lose" data-act="finish" data-outcome="lose">💀 Было поражение</button>
+           <button class="btn" data-act="resume">↩ Возобновить приём голосов</button>
+           <button class="btn" data-act="cancel">Отменить раунд</button>`;
+
     card.innerHTML = `
       <div class="round-top">
         <div>
-          <div class="round-title">Голосование №${round.index} <span class="badge live">идёт</span></div>
-          <div class="round-sub">
-            с ${timeOf(round.openedAt)} · ${round.allowRevote ? 'можно переголосовать' : 'считается первое слово'} ·
-            слова: ${esc(round.words.win.join(' / '))} и ${esc(round.words.lose.join(' / '))}
-          </div>
+          <div class="round-title">Раунд №${round.index} ${badge}</div>
+          <div class="round-sub">${sub}</div>
         </div>
         <div class="vote-counts">
           <span class="w">${esc(round.words.win[0])} — ${w}</span>
@@ -402,31 +492,35 @@ function renderRound() {
         ${l ? `<div class="seg-lose" style="width:${100 - pw}%"></div>` : ''}
         ${!total ? '<div class="seg-empty"></div>' : ''}
       </div>
-      <div class="controls">
-        <button class="btn win" data-act="finish" data-outcome="win">🏆 Была победа</button>
-        <button class="btn lose" data-act="finish" data-outcome="lose">💀 Было поражение</button>
-        <button class="btn" data-act="cancel">Отменить</button>
-      </div>
-      ${votes.length ? `<div class="voters">${votes
-        .map((v) => `<span class="voter ${v.vote === 'win' ? 'w' : 'l'}">${esc(v.nickname)}</span>`)
-        .join('')}</div>` : `<div class="empty">Пока никто не проголосовал — скажи зрителям написать слово в чат.</div>`}
+      <div class="controls">${controls}</div>
+      ${
+        votes.length
+          ? `<div class="voters">${votes
+              .map((v) => `<span class="voter ${v.vote === 'win' ? 'w' : 'l'}">${esc(v.nickname)}</span>`)
+              .join('')}</div>`
+          : `<div class="empty">Пока никто не написал слово-голос в чат.</div>`
+      }
     `;
   } else if (lastFinished) {
     const r = lastFinished;
-    const guessed = r.votes.filter((v) => v.vote === r.outcome);
+    const guessed = (r.votes || []).filter((v) => v.vote === r.outcome);
     card.innerHTML = `
       <div class="round-top">
         <div>
-          <div class="round-title">Голосование №${r.index}
+          <div class="round-title">Раунд №${r.index}
             <span class="badge ${r.outcome}">${r.outcome === 'win' ? 'победа' : 'поражение'}</span>
           </div>
-          <div class="round-sub">угадали ${guessed.length} из ${r.votes.length} · очки начислены</div>
+          <div class="round-sub">угадали ${guessed.length} из ${(r.votes || []).length} · очки начислены</div>
         </div>
         <button class="btn primary" data-act="start">▶ Начать новое голосование</button>
       </div>
-      ${guessed.length ? `<div class="voters">${guessed
-        .map((v) => `<span class="voter ${r.outcome === 'win' ? 'w' : 'l'}">+1 ${esc(v.nickname)}</span>`)
-        .join('')}</div>` : '<div class="empty">В этом раунде никто не угадал.</div>'}
+      ${
+        guessed.length
+          ? `<div class="voters">${guessed
+              .map((v) => `<span class="voter ${r.outcome === 'win' ? 'w' : 'l'}">+1 ${esc(v.nickname)}</span>`)
+              .join('')}</div>`
+          : '<div class="empty">В этом раунде никто не угадал.</div>'
+      }
     `;
   } else {
     card.innerHTML = `
@@ -478,25 +572,51 @@ function renderHistory() {
   const rounds = [...(app.state.rounds || [])].reverse();
   const el = $('history');
   if (!rounds.length) {
-    el.innerHTML = `<div class="empty">История пуста — здесь появятся завершённые голосования.</div>`;
+    el.innerHTML = `<div class="empty">История пуста — здесь появятся завершённые раунды.</div>`;
     return;
   }
+  const current = openRound();
   el.innerHTML = rounds
     .map((r) => {
-      const w = (r.votes || []).filter((v) => v.vote === 'win').length;
-      const l = (r.votes || []).filter((v) => v.vote === 'lose').length;
-      const total = (r.votes || []).length || 1;
-      const badge = r.outcome
-        ? `<span class="badge ${r.outcome}">${r.outcome === 'win' ? 'победа' : 'поражение'}</span>`
-        : `<span class="badge await">ждёт итог</span>`;
+      const phase = roundPhase(r);
+      const votes = phase === 'voting' && r === current && !r.outcome ? liveVotes() : r.votes || [];
+      const w = votes.filter((v) => v.vote === 'win').length;
+      const l = votes.filter((v) => v.vote === 'lose').length;
+      const total = votes.length;
+      let badge;
+      if (phase === 'finished') {
+        badge = `<span class="badge ${r.outcome}">${r.outcome === 'win' ? 'победа' : 'поражение'}</span>`;
+      } else if (phase === 'awaiting') {
+        badge = '<span class="badge await">приём остановлен</span>';
+      } else {
+        badge = '<span class="badge live">идёт</span>';
+      }
+      // полоса: у завершённого раунда — доля угадавших, у открытого — распределение голосов
+      let greenPart;
+      let redPart;
+      let numbers;
+      let hint;
+      if (phase === 'finished') {
+        const guessed = votes.filter((v) => v.vote === r.outcome).length;
+        greenPart = guessed;
+        redPart = total - guessed;
+        numbers = `${guessed}/${total}`;
+        hint = `угадали ${guessed} из ${total}`;
+      } else {
+        greenPart = w;
+        redPart = l;
+        numbers = `${w}/${l}`;
+        hint = `за победу ${w} · за поражение ${l}`;
+      }
+      const scale = total || 1;
       return `<div class="hist-row">
         <div class="idx">№${r.index}</div>
         <div>${badge}</div>
-        <div class="hist-bar">
-          ${w ? `<i style="width:${(w / total) * 100}%;background:var(--win)"></i>` : ''}
-          ${l ? `<i style="width:${(l / total) * 100}%;background:var(--lose)"></i>` : ''}
+        <div class="hist-bar" title="${hint}">
+          ${greenPart ? `<i style="width:${(greenPart / scale) * 100}%;background:var(--win)"></i>` : ''}
+          ${redPart ? `<i style="width:${(redPart / scale) * 100}%;background:var(--lose)"></i>` : ''}
         </div>
-        <div class="hist-nums" title="за победу / за поражение · всего голосов">${w}/${l} · ${total}</div>
+        <div class="hist-nums" title="${hint}">${numbers} · ${total}</div>
       </div>`;
     })
     .join('');
@@ -507,27 +627,35 @@ function renderChat() {
   const s = app.state;
   const messages = (s.messages || []).slice(-90);
   const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 90;
-
-  // какие сообщения реально учтены в текущем раунде
-  const counted = new Map();
   const round = openRound();
+  const phase = roundPhase(round);
+
+  // какие сообщения учтены в текущем раунде (для открытого — до текущей секунды)
+  const counted = new Map();
   if (round) {
+    const cutoff = votesEnd(round);
     const byUser = new Map();
     for (const m of s.messages) {
       if (m.ts < round.openedAt) continue;
+      if (cutoff && m.ts > cutoff) continue;
       if ((m.tags || []).includes('TAG_OWNER')) continue;
       const vote = detectVote(m.content, round.words);
       if (!vote) continue;
-      byUser.set(m.userId, { id: m.id, vote, ts: m.ts });
+      byUser.set(m.userId, { id: m.id, vote });
     }
     for (const [userId, last] of byUser) {
       if (round.allowRevote) {
         counted.set(last.id, last.vote);
       } else {
-        const first = s.messages.find(
-          (m) => m.userId === userId && m.ts >= round.openedAt && detectVote(m.content, round.words)
-        );
-        if (first) counted.set(first.id, detectVote(first.content, round.words));
+        for (const m of s.messages) {
+          if (m.userId !== userId || m.ts < round.openedAt) continue;
+          if (cutoff && m.ts > cutoff) continue;
+          const vote = detectVote(m.content, round.words);
+          if (vote) {
+            counted.set(m.id, vote);
+            break;
+          }
+        }
       }
     }
   }
@@ -541,10 +669,10 @@ function renderChat() {
       let tag = '';
       if (countedVote) {
         cls += countedVote === 'win' ? ' vote-win' : ' vote-lose';
-        tag = `<span class="tag ${countedVote === 'win' ? 'w' : 'l'}">учтён</span>`;
-      } else if (vote && round && !isOwner) {
+        tag = '<span class="tag counted">учтён</span>';
+      } else if (vote && phase !== 'none' && !isOwner && m.ts >= round.openedAt && !(votesEnd(round) && m.ts > votesEnd(round))) {
         cls += ' vote-ignored';
-        tag = `<span class="tag ${vote === 'win' ? 'w' : 'l'}">не учтён</span>`;
+        tag = '<span class="tag ignored">не учтён</span>';
       }
       return `<div class="${cls}">
         <div><span class="nick" style="color:${colorFor(m.nickname)}">${esc(m.nickname)}</span><span class="txt">${esc(m.content)}</span>${tag}${isOwner ? '<span class="tag owner">стример</span>' : ''}</div>
@@ -567,7 +695,6 @@ function syncSettingsInputs() {
   $('revote-toggle').checked = !!s.settings.allowRevote;
   $('proxy-input').value = s.settings.proxy || '';
   $('poll-input').value = s.settings.pollSeconds || 5;
-  $('demo-btn').hidden = isDemo();
   updateWordsHint();
 }
 
@@ -605,6 +732,74 @@ function applyWordsFromInputs() {
   updateWordsHint();
   render();
   toast('Слова сохранены');
+}
+
+// ---------------------------------------------------------------------------
+// Экспорт итоговой таблицы: Excel / CSV / TXT / в буфер обмена
+// ---------------------------------------------------------------------------
+function downloadBlob(blob, filename) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+
+function exportData(kind) {
+  const s = app.state;
+  const scores = scoreboard();
+  const sortedRounds = [...s.rounds].sort((a, b) => a.index - b.index);
+  const leaders = exportLeadersRows(scores);
+  const rounds = exportRoundsRows(sortedRounds, words());
+  const channel = s.channelName || s.channel || 'канал';
+  const stamp = new Date().toISOString().slice(0, 10);
+  const base = `w-vote-${channel}-${stamp}`;
+  const finished = sortedRounds.filter((r) => r.outcome);
+  const guessedAll = scores.reduce((sum, p) => sum + p.guessed, 0);
+
+  const txtHeader = [
+    ['Канал', channel],
+    ['Дата выгрузки', new Date().toLocaleString('ru-RU')],
+    ['Проведено раундов', finished.length],
+    ['Участников', scores.length],
+    ['Всего угаданных исходов', guessedAll],
+    ['Слова-голоса', `${words().win.join('/')} и ${words().lose.join('/')}`],
+  ];
+
+  if (kind === 'xlsx') {
+    const bytes = makeXlsx([
+      { name: 'Лидеры', rows: leaders },
+      { name: 'Раунды', rows: rounds },
+      { name: 'Сводка', rows: txtHeader },
+    ]);
+    downloadBlob(
+      new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
+      `${base}.xlsx`
+    );
+    toast('Таблица сохранена в Excel (.xlsx)');
+    return;
+  }
+  if (kind === 'csv') {
+    downloadBlob(new Blob([makeCsv(leaders)], { type: 'text/csv;charset=utf-8' }), `${base}.csv`);
+    toast('Таблица сохранена в CSV — открывается в Excel и Google Таблицах');
+    return;
+  }
+  const text = makeTxt([
+    { title: `Голосование в чате — ${channel}`, rows: txtHeader },
+    { title: 'Таблица лидеров', rows: leaders },
+    { title: 'Раунды', rows: rounds },
+  ]);
+  if (kind === 'copy') {
+    navigator.clipboard
+      .writeText(text)
+      .then(() => toast('Таблица скопирована — можно вставить в чат или заметки'))
+      .catch(() => toast('Браузер не дал доступ к буферу обмена', true));
+    return;
+  }
+  downloadBlob(new Blob([text], { type: 'text/plain;charset=utf-8' }), `${base}.txt`);
+  toast('Таблица сохранена в текстовом файле (.txt)');
 }
 
 // ---------------------------------------------------------------------------
@@ -681,12 +876,12 @@ $('channel-form').addEventListener('submit', async (e) => {
   }
 });
 
-$('demo-btn').addEventListener('click', () => connectDemo());
-
 $('round-card').addEventListener('click', (e) => {
   const btn = e.target.closest('[data-act]');
   if (!btn) return;
   if (btn.dataset.act === 'start') startRound();
+  if (btn.dataset.act === 'stop') stopVoting();
+  if (btn.dataset.act === 'resume') resumeVoting();
   if (btn.dataset.act === 'finish') finishRound(btn.dataset.outcome);
   if (btn.dataset.act === 'cancel') cancelRound();
 });
@@ -768,6 +963,11 @@ $('poll-input').addEventListener('change', (e) => {
   toast(`Чат будет проверяться каждые ${seconds} с`);
 });
 
+$('export-xlsx').addEventListener('click', () => exportData('xlsx'));
+$('export-csv').addEventListener('click', () => exportData('csv'));
+$('export-txt').addEventListener('click', () => exportData('txt'));
+$('export-copy').addEventListener('click', () => exportData('copy'));
+
 $('export-btn').addEventListener('click', exportBackup);
 $('import-btn').addEventListener('click', () => $('import-file').click());
 $('import-file').addEventListener('change', (e) => {
@@ -804,6 +1004,12 @@ window.addEventListener('beforeunload', () => persist());
   const params = new URLSearchParams(location.search);
   const fromUrl = params.get('c');
   const last = localStorage.getItem(LAST_CHANNEL_KEY);
+
+  // скрытый демо-режим для проверки интерфейса: index.html?demo=1
+  if (params.get('demo') === '1') {
+    connectDemo();
+    return;
+  }
 
   if (fromUrl) {
     $('channel-input').value = fromUrl;
