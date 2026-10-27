@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>W.VOTE — голосование в чате стрима</title>
     <meta name="description" content="Зрители пишут слово в чат — сайт считает голоса и ведёт таблицу лидеров по никам. Работает с любым стримом на w.tv." />
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23f99e1a'/><text x='16' y='23' font-size='18' font-family='sans-serif' font-weight='bold' text-anchor='middle' fill='%23131a22'>W</text></svg>" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23ffffff'/><text x='16' y='23' font-size='18' font-family='sans-serif' font-weight='bold' text-anchor='middle' fill='%230b0e13'>W</text></svg>" />
     <link rel="stylesheet" href="./style.css" />
   </head>
   <body>
@@ -46,13 +46,16 @@
               панели. С ID сайт обращается сразу к чату и не зависит от сервиса профилей.
             </p>
             <ol class="rules small">
-              <li>Открой <a href="https://dash.cloudflare.com/sign-up" target="_blank" rel="noopener">dash.cloudflare.com</a> и зарегистрируйся (бесплатно).</li>
-              <li>Слева выбери <b>Workers &amp; Pages</b> → <b>Create</b> → <b>Worker</b> → придумай имя → <b>Deploy</b>.</li>
-              <li>Нажми <b>Edit code</b>, удали всё в редакторе и вставь код ниже (кнопка «Скопировать код прокси»).</li>
-              <li>Нажми <b>Deploy</b>. Сверху появится адрес вида
-                <code>https://имя.твой-аккаунт.workers.dev</code>.</li>
-              <li>Вернись на этот сайт: <b>«Данные и подключение» → «Свой прокси для чата»</b> и вставь
-                <code>https://имя.твой-аккаунт.workers.dev/?url={url}</code></li>
+              <li>Открой <a href="https://dash.cloudflare.com/sign-up" target="_blank" rel="noopener">dash.cloudflare.com</a>
+                и зарегистрируйся по e-mail — бесплатно, карта не нужна.</li>
+              <li>Слева выбери <b>Compute (Workers)</b> → <b>Create</b> → <b>Start with Hello World!</b> → <b>Deploy</b>.</li>
+              <li>Нажми <b>Edit code</b>, выдели весь текст в редакторе и вставь код ниже
+                (кнопка «Скопировать код прокси») → <b>Deploy</b>.</li>
+              <li>Сверху появится адрес вида <code>https://имя.аккаунт.workers.dev</code>.
+                Допиши в конце <code>/?url={url}</code> — получится готовый шаблон.</li>
+              <li>Вставь его на рабочей панели: <b>«Данные и подключение» → «Свой прокси для чата»</b>.
+                Затем нажми там же <b>«ссылка для зрителей»</b> и раздавай эту ссылку: посредник
+                подхватится у зрителей сам.</li>
             </ol>
             <button type="button" class="ghost-btn" data-copy-proxy>Скопировать код прокси</button>
             <pre id="proxy-worker-code" class="code-block">export default {

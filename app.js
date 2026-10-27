@@ -51,8 +51,19 @@ function forgetProfileCache(nick) {
     localStorage.removeItem(PROFILE_CACHE_PREFIX + String(nick).toLowerCase());
   } catch {}
 }
-// свой прокси: из настроек страницы, иначе из config.js
-const proxyOf = (state) => (state?.settings?.proxy || window.WTV_DEFAULT_PROXY || '').trim();
+// свой прокси: из ссылки (?proxy=...), иначе из настроек канала, иначе из config.js.
+// Ссылка важна: стример настраивает прокси один раз и передаёт зрителям готовый
+// адрес — у них посредник подхватится сам, без всяких настроек.
+const proxyFromUrl = (() => {
+  try {
+    const value = new URLSearchParams(location.search).get('proxy');
+    return value ? value.trim() : '';
+  } catch {
+    return '';
+  }
+})();
+const proxyOf = (state) =>
+  (proxyFromUrl || state?.settings?.proxy || window.WTV_DEFAULT_PROXY || '').trim();
 const storageKey = () => `${STORAGE_KEY}:${app.channel || 'default'}`;
 // «текущий» раунд — тот, у которого ещё нет исхода (голосование или ожидание итога)
 const openRound = () => (app.state.rounds || []).find((r) => !r.outcome) || null;
@@ -1193,8 +1204,12 @@ function renderProxyStatus() {
   if (!el) return;
   const list = proxyStatus(proxyOf(app.state));
   const via = proxyLabel(preferredProxyId());
+  const own = proxyOf(app.state);
   el.innerHTML =
     (via ? `Сейчас работает: <span class="win">${esc(via)}</span><br>` : '') +
+    (own
+      ? `<span class="muted">Свой посредник: настроен${proxyFromUrl ? ' (из ссылки)' : ''}</span><br>`
+      : '') +
     'Способы связи: ' +
     list
       .map(
@@ -1205,7 +1220,19 @@ function renderProxyStatus() {
       )
       .join(' · ') +
     ' · <button type="button" id="probe-btn" class="link-btn">проверить связь</button>' +
-    ' · <button type="button" id="net-reset-btn" class="link-btn">сбросить выбор</button>';
+    ' · <button type="button" id="net-reset-btn" class="link-btn">сбросить выбор</button>' +
+    (own ? ' · <button type="button" id="share-btn" class="link-btn">ссылка для зрителей</button>' : '');
+  const share = $('share-btn');
+  if (share) share.addEventListener('click', () => {
+    const url = new URL(location.href);
+    if (app.state?.channel) url.searchParams.set('c', app.state.channel);
+    url.searchParams.set('proxy', own);
+    const link = url.toString();
+    navigator.clipboard
+      .writeText(link)
+      .then(() => toast('Ссылка скопирована — по ней твой посредник подхватится у зрителей сам'))
+      .catch(() => toast('Браузер не дал доступ к буферу — скопируй адрес из строки браузера', true));
+  });
   const btn = $('probe-btn');
   if (btn) btn.addEventListener('click', runProbe);
   const reset = $('net-reset-btn');

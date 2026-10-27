@@ -49,15 +49,42 @@
 3. **Вставить ID канала вместо ника** — это запасной путь: `profiles-service` не нужен,
    сайт сразу читает чат по ID. ID виден в блоке «Данные и подключение» на рабочей панели
    и в адресе страницы (`?c=<ID>`), его же можно передать другому устройству ссылкой.
-4. **Поднять свой посредник** — 2 минуты, бесплатно, без установки программ:
+4. **Поднять свой посредник один раз и забыть про проблему** — 3 минуты, бесплатно, без установки
+   программ. Подробная инструкция по шагам ниже.
 
-   [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/xiqima/w-vote/tree/main/optional-proxy)
+## Свой прокси по шагам (для стримера)
 
-   либо вручную: `dash.cloudflare.com` → Workers & Pages → Create → Worker → Deploy →
-   Edit code → вставить `optional-proxy/worker.js` → Deploy. Получится адрес
-   `https://имя.аккаунт.workers.dev`, его нужно вписать в
-   «Данные и подключение» → «Свой прокси для чата» в виде
+Нужен браузер и e-mail. Карта не нужна, платить не надо.
+
+1. Открыть <https://dash.cloudflare.com/sign-up>, зарегистрироваться по e-mail и подтвердить его.
+2. В левом меню: **Compute (Workers)** → **Create** → **Start with Hello World!** → **Deploy**.
+   Cloudflare сам создаст воркер с именем вида `w-vote-proxy`.
+3. На странице воркера: **Edit code**. В редакторе выделить всё (Ctrl+A) и вставить код из
+   [`optional-proxy/worker.js`](optional-proxy/worker.js) — тот же код есть на сайте, в блоке
+   «Если подключение не работает» (кнопка «Скопировать код прокси»). Нажать **Deploy**.
+4. Скопировать адрес, который Cloudflare показывает сверху: `https://имя.аккаунт.workers.dev`.
+   Дописать в конце `/?url={url}` → получится шаблон
    `https://имя.аккаунт.workers.dev/?url={url}`.
+5. Открыть сайт w-vote, подключить канал, зайти в **«Данные и подключение»**, вставить шаблон в
+   поле **«Свой прокси для чата»**.
+6. Там же нажать **«ссылка для зрителей»** — скопируется адрес вида
+   `https://xiqima.github.io/w-vote/?c=anakq&proxy=https%3A%2F%2F…%2F%3Furl%3D%7Burl%7D`.
+   Эту ссылку и раздавать: у зрителей твой посредник подхватится сам, им ничего настраивать не нужно.
+
+Хочешь применить ко всем и без ссылок — впиши тот же шаблон в `config.js`:
+
+```js
+window.WTV_DEFAULT_PROXY = 'https://имя.аккаунт.workers.dev/?url={url}';
+```
+
+Проверить, что всё живо, можно одной командой (подставь свой адрес и канал):
+
+```bash
+curl -s "https://имя.аккаунт.workers.dev/?url=https%3A%2F%2Fprofiles-service.w.tv%2Fapi%2Fv1%2Fprofiles%2Fby-nickname%2Fanakq%3Fuser_lang%3Dru%26platform%3Dweb" | head -c 300
+```
+
+Ответ должен начинаться с `{"profile":…`. Если пришло `403`/HTML — воркер собран не в модульном
+формате (см. предупреждение ниже).
 
 > Важно: воркер должен быть **модульным** (`export default { async fetch() {} }`), как в
 > `optional-proxy/worker.js`. Старый вариант с `addEventListener('fetch', …)` в новых воркерах
