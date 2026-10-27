@@ -798,7 +798,8 @@ function updateWordsHint() {
   $('words-hint').innerHTML =
     `Голосом считается сообщение целиком: <b>${esc(w.win[0] || 'win')}</b>, <b>${esc((w.win[0] || 'win').toUpperCase())}!</b>, ` +
     `<b>:KEKwAIT: ${esc(w.lose[0] || 'lose')}</b>. Фраза «я за ${esc(w.win[0] || 'win')}» голосом не считается. ` +
-    `Можно перечислить несколько вариантов через запятую.`;
+    `Можно перечислить несколько вариантов через запятую. ` +
+    `Голосом может быть и символ, и эмодзи: <b>+</b>, <b>🔥</b>, <b>!</b> — повтор подряд (<b>+++</b>) считается тем же голосом.`;
 }
 
 function applyWordsFromInputs() {
@@ -810,7 +811,7 @@ function applyWordsFromInputs() {
     win.every((w, i) => w === current.win[i]) && lose.every((w, i) => w === current.lose[i]);
   if (same) return; // ничего не поменялось — нечего перерисовывать
   if (!win.length || !lose.length) {
-    toast('Нужно хотя бы одно слово в каждом поле', true);
+    toast('В каждом поле нужен хотя бы один голос — слово, символ или эмодзи', true);
     syncSettingsInputs();
     return;
   }

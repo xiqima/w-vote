@@ -48,22 +48,57 @@ function wordsToText(list) {
 
 const EMOTE_RE = /:[a-zA-Z0-9_]{2,}:/g; // :KEKwAIT:
 const EDGE_RE = /^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu; // пунктуация по краям
+const LETTER_RE = /\p{L}/u;
+
+/** разбивает строку на «символы» так, чтобы эмодзи не рвались на половинки */
+function symbolClusters(text) {
+  if (typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function') {
+    try {
+      const seg = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+      return Array.from(seg.segment(text), (part) => part.segment);
+    } catch (e) {
+      /* старый браузер — читаем по код-поинтам */
+    }
+  }
+  return Array.from(text);
+}
+
+/**
+ * Голос без букв («+», «!!!», «🔥») — это тоже голос.
+ * Пробелы убираем, одинаковые символы подряд склеиваем:
+ * «+ + +», «+++» -> «+», «🔥🔥🔥» -> «🔥».
+ */
+function normalizeSymbols(text) {
+  let out = '';
+  for (const ch of symbolClusters(String(text || '').replace(/\s+/gu, ''))) {
+    if (!out.endsWith(ch)) out += ch;
+  }
+  return out;
+}
 
 /**
  * ":pugPls: Win!" -> "win"
  * ":win:"         -> "win"  (если убрать эмоут целиком ничего не осталось,
  *                            пробуем прочитать сообщение без двоеточий —
- *                            иначе слово-голос в формате :слово: терялось)
+ *                            иначе слово-голос в формате :слово: терялся)
+ * "+"             -> "+"    (голоса-символы и эмодзи не должны исчезать:
+ *  "!!!", "🔥🔥"             буквы/цифры тут ни при чём, поэтому пунктуацию
+ *                            по краям НЕ срезаем, а повторы склеиваем)
  */
 function normalizeMessage(text) {
   const raw = String(text || '')
-    .replace(/\s+/g, ' ')
+    .replace(/\s+/gu, ' ')
     .trim()
     .toLowerCase();
   if (!raw) return '';
-  const withoutEmotes = raw.replace(EMOTE_RE, ' ').replace(/\s+/g, ' ').trim().replace(EDGE_RE, '');
-  if (withoutEmotes) return withoutEmotes;
-  return raw.replace(EDGE_RE, '');
+  const tight = raw.replace(EMOTE_RE, ' ').replace(/\s+/gu, ' ').trim();
+  // 1. Обычные слова: пунктуация по краям не мешает («WIN!» -> «win»).
+  const words = tight.replace(EDGE_RE, '');
+  if (LETTER_RE.test(words)) return words;
+  // 2. Эмоут целиком («:win:»): буквы прячутся внутри двоеточий.
+  if (LETTER_RE.test(raw)) return raw.replace(EDGE_RE, '');
+  // 3. Голос-символ: «+», «+++», «!», «🔥» (в том числе «+1»).
+  return normalizeSymbols(tight || raw);
 }
 
 /**

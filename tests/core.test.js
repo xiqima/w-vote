@@ -125,6 +125,28 @@ function reply(body, status = 200) {
       eq(WV.parseWords('Win, :победа!, ВИН, win'), ['win', 'победа', 'вин']);
       eq(WV.wordsToText(['win', 'победа']), 'win, победа');
     });
+    await check('голосом может быть символ или эмодзи', () => {
+      // "+" в поле «слово-голос» больше не превращается в пустую строку
+      eq(WV.parseWords('+'), ['+']);
+      eq(WV.parseWords('+, 🔥, -, ❄️'), ['+', '🔥', '-', '❄️']);
+      eq(WV.normalizeMessage('+'), '+');
+      eq(WV.normalizeMessage('!!!'), '!');
+      eq(WV.normalizeMessage('🔥'), '🔥');
+      // повтор подряд — тот же голос
+      eq(WV.normalizeMessage('+++'), '+');
+      eq(WV.normalizeMessage('+ + +'), '+');
+      eq(WV.normalizeMessage('🔥🔥🔥'), '🔥');
+      eq(WV.detectVote('+ + +', { win: ['+'], lose: ['-'] }), 'win');
+      eq(WV.detectVote('-', { win: ['+'], lose: ['-'] }), 'lose');
+      eq(WV.detectVote('🔥🔥', { win: ['🔥'], lose: ['❄️'] }), 'win');
+      // «+1» остаётся «+1»: голос «1» за него не засчитывается
+      eq(WV.parseWords('+1'), ['+1']);
+      eq(WV.detectVote('+1', { win: ['+1'], lose: ['-1'] }), 'win');
+      eq(WV.detectVote('1', { win: ['+1'], lose: ['-1'] }), null);
+      // обычные слова не изменились
+      eq(WV.normalizeMessage('WIN!'), 'win');
+      eq(WV.parseWords(''), []);
+    });
     await check('normalizeChannelInput понимает ссылку, @ник и мусор', () => {
       eq(WV.normalizeChannelInput('https://w.tv/anakq?x=1'), 'anakq');
       eq(WV.normalizeChannelInput('www.w.tv/Anakq/'), 'Anakq');
