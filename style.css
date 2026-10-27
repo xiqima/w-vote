@@ -108,6 +108,16 @@ button { font: inherit; cursor: pointer; }
   border: 1px solid rgba(255, 92, 108, 0.4); color: #ffb3ba;
   border-radius: 10px; padding: 10px 13px; font-size: 13.5px; line-height: 1.5;
 }
+.error .muted, .error .probe-result { color: #d8bcc2; }
+.error .probe-result { margin-top: 10px; background: #16090c; border-color: rgba(255, 92, 108, 0.3); }
+.error summary { cursor: pointer; }
+.error .probe-result .win { color: #7ee0a1; }
+.error .probe-result .lose { color: #ff8d99; }
+/* ID канала — длинный UUID, должен переноситься на узких экранах */
+#channel-id-line code {
+  background: #0b1017; border: 1px solid var(--line); border-radius: 5px;
+  padding: 1px 5px; font-size: 12px; word-break: break-all;
+}
 
 /* ------------------------- рабочая панель ------------------------- */
 .app { max-width: 1320px; margin: 0 auto; padding: 18px 18px 48px; }
