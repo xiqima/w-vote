@@ -629,8 +629,16 @@ function cancelRound() {
   if (!round) return;
   app.spinning = false; // анимация колеса могла идти — снимаем блокировку
   clearTimeout(app.wheelTimer);
-  const what = roundPhase(round) === 'voting' ? 'голосование' : 'раунд';
-  if (!confirm(`Отменить ${what} №${round.index}? Голоса этого раунда не будут засчитаны.`)) return;
+  const modeName = roundMode(round);
+  const what =
+    modeName === 'wheel'
+      ? roundPhase(round) === 'voting' ? 'розыгрыш' : 'розыгрыш'
+      : modeName === 'poll'
+      ? 'опрос'
+      : roundPhase(round) === 'voting'
+      ? 'голосование'
+      : 'раунд';
+  if (!confirm(`Отменить ${what} №${round.index}? Голоса и заявки этого раунда не будут засчитаны.`)) return;
   app.state.rounds = app.state.rounds.filter((r) => r.id !== round.id);
   persist();
   render();
