@@ -27,6 +27,65 @@
         <p class="hint">Вставь ссылку на свой канал, ник или @ник. Регистрация не нужна.</p>
 
         <div id="landing-error" class="error" hidden></div>
+        <p id="proxy-hint-line" class="muted small" hidden>
+          Не помогло? Ниже — как поднять свой прокси за 2 минуты (бесплатно и без программ).
+        </p>
+
+        <details id="proxy-help" class="proxy-help" hidden>
+          <summary>Если подключение не работает: свой прокси за 2 минуты</summary>
+          <div class="proxy-help-body">
+            <p class="small">
+              Чат w.tv браузер может читать только через посредника. Бесплатные публичные посредники
+              иногда перегружены — тогда помогает свой собственный. Он бесплатный и делается в браузере,
+              без установки программ.
+            </p>
+            <ol class="rules small">
+              <li>Открой <a href="https://dash.cloudflare.com/sign-up" target="_blank" rel="noopener">dash.cloudflare.com</a> и зарегистрируйся (бесплатно).</li>
+              <li>Слева выбери <b>Workers &amp; Pages</b> → <b>Create</b> → <b>Worker</b> → придумай имя → <b>Deploy</b>.</li>
+              <li>Нажми <b>Edit code</b>, удали всё в редакторе и вставь код ниже (кнопка «Скопировать код прокси»).</li>
+              <li>Нажми <b>Deploy</b>. Сверху появится адрес вида
+                <code>https://имя.твой-аккаунт.workers.dev</code>.</li>
+              <li>Вернись на этот сайт: <b>«Данные и подключение» → «Свой прокси для чата»</b> и вставь
+                <code>https://имя.твой-аккаунт.workers.dev/?url={url}</code></li>
+            </ol>
+            <button type="button" class="ghost-btn" data-copy-proxy>Скопировать код прокси</button>
+            <pre id="proxy-worker-code" class="code-block">addEventListener('fetch', (event) => {
+  event.respondWith(handle(event.request));
+});
+
+const ALLOWED = ['profiles-service.w.tv', 'chats-service.w.tv'];
+
+async function handle(request) {
+  const cors = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET,OPTIONS',
+    'Access-Control-Allow-Headers': 'content-type',
+  };
+  if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
+
+  const target = new URL(request.url).searchParams.get('url');
+  if (!target) return new Response('нужен параметр ?url=', { status: 400, headers: cors });
+
+  let url;
+  try { url = new URL(target); } catch { return new Response('плохой адрес', { status: 400, headers: cors }); }
+  if (!ALLOWED.includes(url.hostname)) return new Response('домен не разрешён', { status: 403, headers: cors });
+
+  const upstream = await fetch(url.toString(), {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+      'Origin': 'https://w.tv',
+      'Referer': 'https://w.tv/',
+      'Accept': 'application/json',
+    },
+  });
+
+  return new Response(upstream.body, {
+    status: upstream.status,
+    headers: { ...cors, 'content-type': upstream.headers.get('content-type') || 'application/json; charset=utf-8', 'cache-control': 'no-store' },
+  });
+}</pre>
+          </div>
+        </details>
 
         <div class="landing-foot">
           <span class="pill">без регистрации и паролей</span>
@@ -140,9 +199,12 @@
                 <span>Частота проверки чата, секунды</span>
                 <input id="poll-input" type="number" min="3" max="30" step="1" />
               </label>
+              <p class="muted small" id="proxy-state"></p>
+              <div id="probe-result" class="probe-result" hidden></div>
               <p class="muted small" id="proxy-hint">
-                Чат читается через публичный прокси (r.jina.ai). Если он начнёт отвечать медленно,
-                можно подставить свой — как это сделать, написано в инструкции.
+                Чат читается через публичные прокси (r.jina.ai, allorigins, cors.lol) — сайт сам выбирает
+                рабочий и запоминает его. Если все перегружены, подставь свой: код для Cloudflare Workers
+                есть на странице подключения («Если подключение не работает»).
               </p>
               <div id="settings-msg" class="muted small"></div>
             </div>
@@ -160,8 +222,9 @@
               Передумал останавливать? Нажми «Возобновить приём голосов» — голоса снова пойдут.
             </p>
             <p class="muted small">
-              Очки и настройки хранятся только у тебя в браузере: если открыть сайт на другом
-              устройстве, таблица будет своя. Сделай резервную копию, чтобы перенести.
+              Слова-голоса можно писать в любом виде: <b>win</b>, <b>WIN!</b>, <b>:win:</b> —
+              и в чате, и в поле настроек. Очки и настройки хранятся только у тебя в браузере:
+              если открыть сайт на другом устройстве, таблица будет своя.
             </p>
           </div>
         </section>

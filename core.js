@@ -27,12 +27,19 @@ function normalizeChannelInput(input) {
 // ---------------------------------------------------------------------------
 const DEFAULT_WORDS = { win: ['win'], lose: ['lose'] };
 
-/** "win, победа ,  ВИН" -> ["win","победа","вин"] */
+/** приводит слово-голос к тому же виду, что и сообщение: ":Победа!" -> "победа" */
+function normalizeWord(word) {
+  return normalizeMessage(word);
+}
+
+/** "win, победа ,  ВИН, :луз:" -> ["win","победа","вин","луз"] */
 function parseWords(text) {
-  return String(text || '')
-    .split(',')
-    .map((w) => w.trim().toLowerCase())
-    .filter(Boolean);
+  const out = [];
+  for (const part of String(text || '').split(',')) {
+    const word = normalizeWord(part);
+    if (word && !out.includes(word)) out.push(word);
+  }
+  return out;
 }
 
 function wordsToText(list) {
@@ -42,14 +49,21 @@ function wordsToText(list) {
 const EMOTE_RE = /:[a-zA-Z0-9_]{2,}:/g; // :KEKwAIT:
 const EDGE_RE = /^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu; // пунктуация по краям
 
-/** ":pugPls: Win!" -> "win" */
+/**
+ * ":pugPls: Win!" -> "win"
+ * ":win:"         -> "win"  (если убрать эмоут целиком ничего не осталось,
+ *                            пробуем прочитать сообщение без двоеточий —
+ *                            иначе слово-голос в формате :слово: терялось)
+ */
 function normalizeMessage(text) {
-  return String(text || '')
-    .replace(EMOTE_RE, ' ')
+  const raw = String(text || '')
     .replace(/\s+/g, ' ')
     .trim()
-    .toLowerCase()
-    .replace(EDGE_RE, '');
+    .toLowerCase();
+  if (!raw) return '';
+  const withoutEmotes = raw.replace(EMOTE_RE, ' ').replace(/\s+/g, ' ').trim().replace(EDGE_RE, '');
+  if (withoutEmotes) return withoutEmotes;
+  return raw.replace(EDGE_RE, '');
 }
 
 /**
@@ -271,7 +285,10 @@ function rawJson(text) {
   }
 }
 
-/** Список способов добраться до API (по порядку) */
+/**
+ * Список способов добраться до API w.tv.
+ * Порядок — по надёжности; «свой прокси» всегда первый, если он задан.
+ */
 function proxies(customProxy) {
   const list = [];
   if (customProxy && customProxy.trim()) {
@@ -279,7 +296,8 @@ function proxies(customProxy) {
     list.push({
       id: 'custom',
       label: 'свой прокси',
-      build: (url) => (template.includes('{url}') ? template.replace('{url}', encodeURIComponent(url)) : template + encodeURIComponent(url)),
+      build: (url) =>
+        template.includes('{url}') ? template.replace('{url}', encodeURIComponent(url)) : template + encodeURIComponent(url),
       extract: (text) => text,
     });
   }
@@ -292,6 +310,13 @@ function proxies(customProxy) {
       const i = text.indexOf(marker);
       return i >= 0 ? text.slice(i + marker.length) : text;
     },
+  });
+  list.push({
+    id: 'allorigins',
+    label: 'allorigins',
+    build: (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+    extract: (text) => text,
+    slow: true,
   });
   list.push({
     id: 'corslol',
@@ -308,6 +333,65 @@ function proxies(customProxy) {
   return list;
 }
 
+/** какой прокси сработал в прошлый раз + временно «остывающие» после ошибок */
+const proxyHealth = new Map(); // id -> { fails, coolUntil }
+
+function markProxyFail(id) {
+  const h = proxyHealth.get(id) || { fails: 0, coolUntil: 0 };
+  h.fails += 1;
+  // после 2 ошибок подряд — пауза, чтобы не тратить на него время
+  if (h.fails >= 2) h.coolUntil = Date.now() + Math.min(h.fails * 15000, 120000);
+  proxyHealth.set(id, h);
+}
+
+function markProxyOk(id) {
+  proxyHealth.set(id, { fails: 0, coolUntil: 0 });
+}
+
+function proxyCooling(id) {
+  const h = proxyHealth.get(id);
+  return !!(h && h.coolUntil > Date.now());
+}
+
+/**
+ * Диагностика: по очереди проверяем каждый способ связи и возвращаем результат.
+ * Нужна, когда «не подключается» — сразу видно, что именно не работает.
+ */
+async function probeProxies(targetUrl, customProxy, timeoutMs = 12000) {
+  const out = [];
+  for (const proxy of proxies(customProxy)) {
+    const started = Date.now();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(proxy.build(targetUrl), { signal: controller.signal, cache: 'no-store' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const text = await res.text();
+      if (/Request blocked|403 ERROR|Rate limit|error code: 522/i.test(text.slice(0, 500))) throw new Error('запрос отклонён');
+      const data = rawJson(proxy.extract(text));
+      if (!data) throw new Error('ответ не JSON');
+      // ответ получен — значит канал связи рабочий (даже если ника не существует)
+      out.push({ label: proxy.label, ok: true, ms: Date.now() - started, noNick: !!data.errors });
+    } catch (err) {
+      const message = String((err && err.message) || err);
+      const friendly = /abort/i.test(message) ? 'слишком медленно' : /Failed to fetch/i.test(message) ? 'недоступен' : message;
+      out.push({ label: proxy.label, ok: false, ms: Date.now() - started, error: friendly });
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  return out;
+}
+
+/** какие способы сейчас в игре — для диагностики в интерфейсе */
+function proxyStatus() {
+  return proxies('').map((p) => ({
+    id: p.id,
+    label: p.label,
+    cooling: proxyCooling(p.id),
+  }));
+}
+
 let preferredProxy = null; // какой способ сработал последним
 let proxyOrder = null;
 
@@ -316,48 +400,71 @@ function resetProxyOrder() {
   proxyOrder = null;
 }
 
-async function requestViaProxy(targetUrl, customProxy, timeoutMs = 12000) {
+async function requestViaProxy(targetUrl, customProxy, timeoutMs = 15000) {
   const all = proxies(customProxy);
-  if (!proxyOrder) proxyOrder = all.map((p) => p.id);
-  // ставим последний удачный способ первым
+  // сверху — тот, что сработал в прошлый раз, затем не «остывающие», затем остальные
   const ordered = [...all].sort((a, b) => {
-    const ia = a.id === preferredProxy ? -1 : proxyOrder.indexOf(a.id);
-    const ib = b.id === preferredProxy ? -1 : proxyOrder.indexOf(b.id);
-    return ia - ib;
+    const score = (p) => (p.id === preferredProxy ? -2 : proxyCooling(p.id) ? 1 : 0);
+    return score(a) - score(b);
   });
 
-  let lastError = null;
+  const errors = [];
   for (const proxy of ordered) {
+    if (proxyCooling(proxy.id)) {
+      errors.push(`${proxy.label}: временно пропущен`);
+      continue;
+    }
     const url = proxy.build(targetUrl);
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const timer = setTimeout(() => controller.abort(), proxy.slow ? timeoutMs * 2 : timeoutMs);
     try {
       const res = await fetch(url, { signal: controller.signal, cache: 'no-store' });
       if (!res.ok) throw new Error(`${proxy.label}: HTTP ${res.status}`);
       const text = await res.text();
       // w.tv иногда отвечает 403 (защита CloudFront), а прокси отдаёт это как
       // обычный текст — такой ответ нельзя считать успешным
-      if (/Request blocked|403 ERROR|Target URL returned error|Rate limit|Too Many Requests/i.test(text.slice(0, 600))) {
-        throw new Error(`${proxy.label}: запрос заблокирован w.tv`);
+      if (/Request blocked|403 ERROR|Target URL returned error|Rate limit|Too Many Requests|error code: 522/i.test(text.slice(0, 600))) {
+        throw new Error(`${proxy.label}: запрос отклонён`);
       }
       const data = rawJson(proxy.extract(text));
-      if (!data) throw new Error(`${proxy.label}: не JSON`);
+      if (!data) throw new Error(`${proxy.label}: ответ не JSON`);
       if (data.error || data.errors) throw new Error(`${proxy.label}: ${JSON.stringify(data.error || data.errors).slice(0, 80)}`);
       preferredProxy = proxy.id;
+      markProxyOk(proxy.id);
       return data;
     } catch (err) {
-      lastError = err;
+      markProxyFail(proxy.id);
+      errors.push(String((err && err.message) || err));
     } finally {
       clearTimeout(timer);
     }
   }
-  throw lastError || new Error('все способы недоступны');
+  const error = new Error(errors.join('; ') || 'все способы недоступны');
+  error.code = 'network';
+  error.details = errors;
+  throw error;
+}
+
+/** повтор запроса несколько раз с паузой — спасает от случайных сбоев прокси */
+async function requestWithRetry(targetUrl, customProxy, attempts = 3) {
+  let lastError = null;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await requestViaProxy(targetUrl, customProxy);
+    } catch (err) {
+      lastError = err;
+      // «канал не найден» повторять бессмысленно
+      if (err && err.code === 'channel_not_found') throw err;
+      if (i < attempts - 1) await new Promise((r) => setTimeout(r, 600 * Math.pow(2, i)));
+    }
+  }
+  throw lastError;
 }
 
 /** Ник -> { userId, nickname } */
 async function fetchProfile(nickname, customProxy = '') {
   const url = `${PROFILES_API}/profiles/by-nickname/${encodeURIComponent(nickname)}?user_lang=ru&platform=web&_=${Date.now()}`;
-  const data = await requestViaProxy(url, customProxy);
+  const data = await requestWithRetry(url, customProxy);
   if (!data?.profile?.userId) {
     // «ник не найден» w.tv сообщает отдельным полем, всё остальное — сбой связи
     if (data?.errors) {
@@ -374,7 +481,7 @@ async function fetchProfile(nickname, customProxy = '') {
 async function fetchAvatar(userId, customProxy = '') {
   try {
     const url = `${PROFILES_API}/users/${encodeURIComponent(userId)}/profile/images?user_lang=ru&platform=web&_=${Date.now()}`;
-    const data = await requestViaProxy(url, customProxy);
+    const data = await requestWithRetry(url, customProxy, 2);
     const img = (data?.images || []).find((i) => i.type === 'avatar');
     return img?.imageUrl || null;
   } catch {
@@ -385,7 +492,7 @@ async function fetchAvatar(userId, customProxy = '') {
 /** Последние ~50 сообщений чата (новые первыми, как отдаёт API) */
 async function fetchMessages(userId, customProxy = '') {
   const url = `${CHATS_API}/chats/${encodeURIComponent(userId)}/messages?user_lang=ru&platform=web&_=${Date.now()}`;
-  const data = await requestViaProxy(url, customProxy);
+  const data = await requestWithRetry(url, customProxy, 2);
   if (!Array.isArray(data?.messages)) throw new Error('сообщения не получены (прокси вернул не то)');
   const list = data.messages;
   return list
@@ -719,6 +826,9 @@ function plural(n, one, few, many) {
 // Публичный набор функций для app.js и тестов
 // ---------------------------------------------------------------------------
 window.WVote = {
+  probeProxies,
+  proxyStatus,
+  normalizeWord,
   votesEnd,
   roundPhase,
   exportLeadersRows,
