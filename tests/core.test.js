@@ -46,15 +46,27 @@ function eq(actual, expected, message) {
 }
 
 /** загружает core.js в отдельную песочницу с подставными fetch и localStorage */
-function loadCore(fetchImpl) {
-  const store = new Map();
+/** localStorage поверх Map — с length/key, как в браузере */
+function makeStorage(map) {
+  const store = map || new Map();
+  return {
+    store,
+    get length() {
+      return store.size;
+    },
+    key: (i) => [...store.keys()][i] ?? null,
+    getItem: (k) => (store.has(k) ? store.get(k) : null),
+    setItem: (k, v) => store.set(k, String(v)),
+    removeItem: (k) => store.delete(k),
+  };
+}
+
+function loadCore(fetchImpl, sharedStore) {
+  const storage = makeStorage(sharedStore);
+  const store = storage.store;
   const sandbox = {
     window: {},
-    localStorage: {
-      getItem: (k) => (store.has(k) ? store.get(k) : null),
-      setItem: (k, v) => store.set(k, String(v)),
-      removeItem: (k) => store.delete(k),
-    },
+    localStorage: storage,
     fetch: fetchImpl || (async () => { throw new Error('нет сети'); }),
     AbortController,
     setTimeout,
@@ -327,6 +339,93 @@ function reply(body, status = 200) {
       });
       await W2.fetchProfile('anakq', 'https://me.workers.dev/?url={url}');
       assert(seen[0].startsWith('https://me.workers.dev/?url='), 'свой прокси не первый: ' + seen[0]);
+    });
+  }
+
+  console.log('\ncore.js: настройки связи и полный сброс');
+  {
+    const store = new Map();
+    const { WV } = loadCore(async () => reply(PROFILE_OK), store);
+
+    await check('по умолчанию включены все посредники', () => {
+      eq(WV.proxyCatalog().map((p) => p.id), ['jina', 'allorigins', 'allorigins_json', 'corslol', 'codetabs', 'direct']);
+      eq(WV.proxies().length, 6);
+      assert(WV.proxyStatus().every((p) => p.enabled), 'не все включены по умолчанию');
+    });
+
+    await check('галочка выключает посредника и это переживает перезагрузку', () => {
+      WV.setProxyEnabled('corslol', false);
+      assert(!WV.proxies().some((p) => p.id === 'corslol'), 'corslol всё ещё используется');
+      eq(WV.proxies().length, 5);
+      // «перезагрузка страницы»: новый экземпляр core.js на том же localStorage
+      const again = loadCore(async () => reply(PROFILE_OK), store).WV;
+      assert(!again.isProxyEnabled('corslol'), 'выключение не сохранилось');
+      assert(again.isProxyEnabled('jina'), 'остальные должны остаться включёнными');
+      assert(again.proxyStatus().find((p) => p.id === 'corslol').enabled === false, 'в статусе не видно');
+    });
+
+    await check('выключенный посредник не участвует в запросах', async () => {
+      const seen = [];
+      const fresh = loadCore(async (url) => {
+        seen.push(url);
+        return reply(PROFILE_OK);
+      }, store).WV;
+      fresh.setProxyEnabled('jina', false);
+      fresh.setProxyEnabled('allorigins', false);
+      fresh.setProxyEnabled('allorigins_json', false);
+      fresh.setProxyEnabled('direct', false);
+      await fresh.fetchProfile('anakq');
+      assert(seen.length > 0, 'запросов не было');
+      assert(seen.every((u) => u.includes('codetabs')), 'пошли не через разрешённый способ: ' + seen.join(', '));
+    });
+
+    await check('добавление своего прокси включает его в список', () => {
+      WV.setGlobalProxy('https://me.workers.dev/?url={url}');
+      eq(WV.globalProxy(), 'https://me.workers.dev/?url={url}');
+      eq(WV.proxies().map((p) => p.id)[0], 'custom');
+    });
+
+    await check('свой прокси можно выключить галочкой, не стирая адрес', () => {
+      WV.setProxyEnabled('custom', false);
+      assert(!WV.proxies().some((p) => p.id === 'custom'), 'custom всё ещё используется');
+      eq(WV.globalProxy(), 'https://me.workers.dev/?url={url}'); // адрес не потерян
+      assert(WV.proxyStatus().some((p) => p.id === 'custom' && !p.enabled), 'выключенный custom пропал из списка');
+      WV.setProxyEnabled('custom', true);
+    });
+
+    await check('если выключено всё — понятная ошибка, а не тишина', async () => {
+      const fresh = loadCore(async () => reply(PROFILE_OK), store).WV;
+      const catalog = fresh.proxyCatalog(fresh.globalProxy());
+      assert(catalog.some((p) => p.id === 'custom'), 'свой прокси должен быть в полном списке');
+      for (const p of catalog) fresh.setProxyEnabled(p.id, false);
+      eq(fresh.proxies().length, 0);
+      let error = null;
+      try {
+        await fresh.fetchProfile('anakq');
+      } catch (err) {
+        error = err;
+      }
+      assert(error, 'ошибки не было');
+      eq(error.code, 'network');
+      assert(/выключены/.test(error.message), 'непонятный текст: ' + error.message);
+      for (const p of catalog) fresh.setProxyEnabled(p.id, true);
+    });
+
+    await check('resetEverything стирает все свои ключи и не трогает чужие', () => {
+      const fresh = loadCore(async () => reply(PROFILE_OK), store).WV;
+      store.set('wtv_vote_v2:anakq', '{"rounds":[]}');
+      store.set('wtv_vote_last_channel', 'anakq');
+      store.set('wtv_vote_profile:anakq', '{"userId":"x"}');
+      store.set('wtv_vote_net_v1', '{"proxy":"https://x"}');
+      store.set('чужой_ключ', 'не трогать');
+      const removed = fresh.resetEverything();
+      eq(removed, 4, 'удалено не то количество ключей');
+      eq(store.get('чужой_ключ'), 'не трогать');
+      assert(![...store.keys()].some((k) => k.startsWith('wtv_vote')), 'остались наши ключи: ' + [...store.keys()].join(','));
+      // после сброса — состояние «как в первый раз»
+      eq(fresh.isProxyEnabled('jina'), true);
+      eq(fresh.globalProxy(), '');
+      eq(fresh.proxyCatalog().length, 6);
     });
   }
 

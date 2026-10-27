@@ -107,6 +107,28 @@ button { font: inherit; cursor: pointer; }
   padding: 12px; font-size: 11.5px; line-height: 1.45; color: #b7c6d8;
   white-space: pre; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
+/* ------------------- настройки связи на странице входа ------------------- */
+.settings-block {
+  margin-top: 16px; border: 1px solid var(--line); border-radius: 12px;
+  background: #10161f; padding: 0 16px;
+}
+.settings-block[open] { padding-bottom: 16px; }
+.settings-block > summary {
+  cursor: pointer; padding: 12px 0; font-weight: 600; color: #cbd5e4; font-size: 13.5px;
+}
+.settings-inner { display: flex; flex-direction: column; gap: 8px; }
+.settings-inner > p { margin: 0; line-height: 1.55; }
+/* галочки «какие посредники использовать» */
+.proxy-choices { display: flex; flex-direction: column; gap: 2px; }
+.proxy-choices .choice {
+  display: flex; align-items: center; gap: 8px; font-size: 13px; color: #c3ccdb;
+  padding: 5px 6px; border-radius: 8px; cursor: pointer;
+}
+.proxy-choices .choice:hover { background: #141b26; }
+.proxy-choices .choice.off { color: var(--muted); }
+.proxy-choices .choice input { width: 16px; height: 16px; accent-color: var(--accent); flex: 0 0 auto; }
+.proxy-choices .choice span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 .error {
   margin-top: 14px; background: rgba(255, 92, 108, 0.12);
   border: 1px solid rgba(255, 92, 108, 0.4); color: #ffb3ba;

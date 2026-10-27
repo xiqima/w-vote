@@ -9,6 +9,7 @@ const {
   makeCsv, makeTxt, makeXlsx, normalizeChannelInput, parseWords, plural, probeProxies, proxyStatus, resetProxyOrder,
   roundPhase, saveState, tallyVotes, timeOf, uid, votesEnd, wordsToText,
   clearProxyHealth, looksLikeUserId, preferredProxyId,
+  globalProxy, setGlobalProxy, proxyStatus: proxyStatusOf, setProxyEnabled, resetEverything,
 } = window.WVote;
 
 const $ = (id) => document.getElementById(id);
@@ -54,16 +55,17 @@ function forgetProfileCache(nick) {
 // свой прокси: из ссылки (?proxy=...), иначе из настроек канала, иначе из config.js.
 // Ссылка важна: стример настраивает прокси один раз и передаёт зрителям готовый
 // адрес — у них посредник подхватится сам, без всяких настроек.
-const proxyFromUrl = (() => {
+function proxyFromUrl() {
   try {
     const value = new URLSearchParams(location.search).get('proxy');
     return value ? value.trim() : '';
   } catch {
     return '';
   }
-})();
+}
+// порядок: ссылка (?proxy=) → настройки браузера → старые настройки канала → config.js
 const proxyOf = (state) =>
-  (proxyFromUrl || state?.settings?.proxy || window.WTV_DEFAULT_PROXY || '').trim();
+  (proxyFromUrl() || globalProxy() || state?.settings?.proxy || window.WTV_DEFAULT_PROXY || '').trim();
 const storageKey = () => `${STORAGE_KEY}:${app.channel || 'default'}`;
 // «текущий» раунд — тот, у которого ещё нет исхода (голосование или ожидание итога)
 const openRound = () => (app.state.rounds || []).find((r) => !r.outcome) || null;
@@ -180,6 +182,7 @@ function showLanding() {
   $('landing').hidden = false;
   const url = new URL(location.href);
   url.searchParams.delete('c');
+  url.searchParams.delete('demo');
   history.replaceState(null, '', url);
   $('channel-input').value = '';
   $('channel-input').focus();
@@ -778,6 +781,10 @@ function syncSettingsInputs() {
   const s = app.state;
   renderProxyStatus();
   renderChannelId();
+  renderProxyChoices();
+  const own = proxyOf(s);
+  if ($('proxy-input')) $('proxy-input').value = own;
+  if ($('landing-proxy-input')) $('landing-proxy-input').value = own;
   $('words-win').value = wordsToText(words().win);
   $('words-lose').value = wordsToText(words().lose);
   $('revote-toggle').checked = !!s.settings.allowRevote;
@@ -1003,6 +1010,7 @@ async function probeInto(container, nick) {
       ? '<div class="muted small" style="margin-top:6px">Связь есть — жми «Повторить», чат должен подтянуться.</div>'
       : '<div class="muted small" style="margin-top:6px">Ни один посредник не ответил с твоего подключения. Поможет VPN или свой прокси — инструкция в блоке «Что делать?».</div>');
   renderProxyStatus();
+  renderProxyChoices();
   return results;
 }
 
@@ -1084,6 +1092,20 @@ async function submitChannel(inputValue, options = {}) {
     btn.textContent = restore;
   }
 }
+
+// страница подключения: свой прокси и проверка связи доступны до подключения канала
+$('landing-proxy-input').addEventListener('change', (e) => applyProxyInput(e.target.value));
+
+$('landing-probe-btn').addEventListener('click', async () => {
+  const btn = $('landing-probe-btn');
+  applyProxyInput($('landing-proxy-input').value);
+  btn.disabled = true;
+  const restore = btn.textContent;
+  btn.textContent = 'проверяю…';
+  await probeInto($('landing-probe-result'), normalizeChannelInput($('channel-input').value) || 'w');
+  btn.disabled = false;
+  btn.textContent = restore;
+});
 
 $('channel-form').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -1199,6 +1221,69 @@ function renderChannelId() {
     `<span class="muted">— с ним сайт подключается, даже если сервис профилей не отвечает</span>`;
 }
 
+/**
+ * Галочки «какие способы связи использовать». Один и тот же список рисуется
+ * и на странице подключения, и в настройках канала: настройки общие для браузера.
+ */
+function renderProxyChoices() {
+  const own = proxyOf(app.state);
+  const list = proxyStatusOf(own);
+  const html = list
+    .map(
+      (p) =>
+        `<label class="choice${p.enabled ? '' : ' off'}" title="${esc(p.label)}">` +
+        `<input type="checkbox" data-proxy-id="${esc(p.id)}"${p.enabled ? ' checked' : ''}> ` +
+        `<span>${esc(p.label)}</span>` +
+        (p.cooling ? '<span class="muted small"> · пауза</span>' : '') +
+        (p.preferred && p.enabled ? '<span class="win small"> · работает</span>' : '') +
+        (p.id === 'direct' ? '<span class="muted small"> · без посредника, обычно блокируется CORS</span>' : '') +
+        '</label>'
+    )
+    .join('');
+  const enabledCount = list.filter((p) => p.enabled).length;
+  const note =
+    enabledCount === 0
+      ? '<div class="lose small" style="margin-top:6px">Все способы выключены — включи хотя бы один, иначе чат читать нечем.</div>'
+      : '';
+  document.querySelectorAll('[data-proxy-choices]').forEach((el) => {
+    el.innerHTML = html + note;
+  });
+}
+
+/** полный сброс: как будто сайт открыли впервые */
+function resetAll() {
+  if (
+    !confirm(
+      'Стереть ВСЁ: каналы, очки, раунды, настройки связи, кэш канала и запомненных посредников?\n' +
+        'Сайт станет как при первом заходе. Отменить будет нельзя.'
+    )
+  )
+    return;
+  resetEverything();
+  // чистим адрес от ?c=, ?proxy=, ?demo= — иначе сайт сразу попробует подключиться заново
+  try {
+    const url = new URL(location.href);
+    url.searchParams.delete('c');
+    url.searchParams.delete('proxy');
+    url.searchParams.delete('demo');
+    history.replaceState(null, '', url.pathname + url.search);
+  } catch {}
+  app.errors = 0;
+  app.lastError = '';
+  app.usedCache = false;
+  app.refreshedProfile = false;
+  showLanding(); // останавливает опрос и показывает экран подключения
+  $('landing-error').hidden = true;
+  $('proxy-help').hidden = true;
+  $('proxy-hint-line').hidden = true;
+  $('landing-proxy-input').value = '';
+  $('proxy-input').value = '';
+  $('landing-probe-result').hidden = true;
+  renderProxyStatus();
+  renderProxyChoices();
+  toast('Всё стёрто — сайт как при первом заходе');
+}
+
 function renderProxyStatus() {
   const el = $('proxy-state');
   if (!el) return;
@@ -1208,7 +1293,7 @@ function renderProxyStatus() {
   el.innerHTML =
     (via ? `Сейчас работает: <span class="win">${esc(via)}</span><br>` : '') +
     (own
-      ? `<span class="muted">Свой посредник: настроен${proxyFromUrl ? ' (из ссылки)' : ''}</span><br>`
+      ? `<span class="muted">Свой посредник: настроен${proxyFromUrl() ? ' (из ссылки)' : ''}</span><br>`
       : '') +
     'Способы связи: ' +
     list
@@ -1256,13 +1341,49 @@ async function runProbe() {
   btn.textContent = 'проверить связь';
 }
 
-$('proxy-input').addEventListener('change', (e) => {
-  const value = e.target.value.trim();
-  if (value === (app.state.settings.proxy || '')) return;
-  app.state.settings.proxy = value;
+/**
+ * Поле «свой прокси»: значение общее для браузера (страница входа и панель
+ * показывают одно и то же). В настройках канала дублируем — для старых данных.
+ */
+function applyProxyInput(value) {
+  const clean = String(value || '').trim();
+  if (clean === proxyOf(app.state)) return;
+  setGlobalProxy(clean);
+  if (app.state) {
+    app.state.settings.proxy = clean;
+    persist();
+  }
   resetProxyOrder();
-  persist();
-  toast(app.state.settings.proxy ? 'Прокси сохранён' : 'Использую публичный прокси');
+  clearProxyHealth();
+  // поля на странице входа и в панели показывают одно и то же значение
+  for (const id of ['proxy-input', 'landing-proxy-input']) {
+    const field = $(id);
+    if (field && field !== document.activeElement) field.value = clean;
+  }
+  renderProxyStatus();
+  renderProxyChoices();
+  toast(clean ? 'Свой прокси сохранён' : 'Использую публичные посредники');
+}
+
+$('proxy-input').addEventListener('change', (e) => applyProxyInput(e.target.value));
+
+// галочки посредников (общий обработчик: список рисуется в двух местах)
+document.addEventListener('change', (e) => {
+  const box = e.target.closest('input[data-proxy-id]');
+  if (!box) return;
+  const id = box.dataset.proxyId;
+  const label = (proxyStatusOf(proxyOf(app.state)).find((p) => p.id === id) || {}).label || id;
+  setProxyEnabled(id, box.checked);
+  resetProxyOrder();
+  renderProxyChoices();
+  renderProxyStatus();
+  toast(box.checked ? `«${label}» включён` : `«${label}» выключен`);
+  if (box.checked && app.state) pollNow();
+});
+
+// кнопки «Сбросить всё» (страница входа и настройки канала)
+document.addEventListener('click', (e) => {
+  if (e.target.closest('[data-reset-everything]')) resetAll();
 });
 
 $('poll-input').addEventListener('change', (e) => {
@@ -1313,6 +1434,10 @@ window.addEventListener('beforeunload', () => persist());
 // Старт
 // ---------------------------------------------------------------------------
 (function boot() {
+  // настройки связи (посредники, свой прокси, сброс) нужны ещё до подключения канала
+  $('landing-proxy-input').value = proxyOf(null);
+  renderProxyChoices();
+
   const params = new URLSearchParams(location.search);
   const fromUrl = params.get('c');
   const last = localStorage.getItem(LAST_CHANNEL_KEY);
