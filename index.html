@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>W.VOTE — голосование в чате стрима</title>
+    <meta name="description" content="Зрители пишут слово в чат — сайт считает голоса и ведёт таблицу лидеров по никам. Работает с любым стримом на w.tv." />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23f99e1a'/><text x='16' y='23' font-size='18' font-family='sans-serif' font-weight='bold' text-anchor='middle' fill='%23131a22'>W</text></svg>" />
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <!-- ================= ЭКРАН 1: подключение канала ================= -->
+    <main id="landing" class="landing">
+      <div class="landing-card">
+        <div class="logo"><span class="logo-mark">W</span><span class="logo-text">.VOTE</span></div>
+        <h1>Голосование прямо в чате</h1>
+        <p class="lead">
+          Зрители пишут в чат одно слово — например <b class="win">win</b> или <b class="lose">lose</b>.
+          Сайт считает голоса, а после раунда начисляет очко тем, кто угадал исход.
+          Подходит для любого стрима: игра, турнир, челлендж, ставки на результат.
+        </p>
+
+        <form id="channel-form" class="channel-form" autocomplete="off">
+          <input id="channel-input" type="text" placeholder="https://w.tv/твой_ник" spellcheck="false" />
+          <button type="submit">Подключить чат</button>
+        </form>
+        <p class="hint">Вставь ссылку на свой канал, ник или @ник. Регистрация не нужна.</p>
+
+        <div id="landing-error" class="error" hidden></div>
+
+        <div class="landing-actions">
+          <button id="demo-btn" class="ghost-btn">Посмотреть демо без своего канала</button>
+        </div>
+
+        <div class="landing-foot">
+          <span class="pill">без регистрации и паролей</span>
+          <span class="pill">данные остаются в твоём браузере</span>
+          <span class="pill">работает на телефоне</span>
+        </div>
+      </div>
+    </main>
+
+    <!-- ================= ЭКРАН 2: рабочая панель ================= -->
+    <div id="app" class="app" hidden>
+      <header class="topbar">
+        <div class="topbar-left">
+          <div class="logo small"><span class="logo-mark">W</span><span class="logo-text">.VOTE</span></div>
+          <a id="channel-link" class="channel" href="#" target="_blank" rel="noopener">
+            <span id="channel-avatar" class="avatar"></span>
+            <span class="channel-meta">
+              <span id="channel-name" class="channel-name">—</span>
+              <span id="channel-status" class="channel-status">подключаюсь к чату…</span>
+            </span>
+          </a>
+        </div>
+        <div class="topbar-right">
+          <span class="storage-note" title="Очки и настройки не уходят на сервер: они лежат в памяти этого браузера">
+            💾 только в этом браузере
+          </span>
+          <button id="change-channel" class="ghost-btn">Сменить канал</button>
+        </div>
+      </header>
+
+      <main class="grid">
+        <!-- ---------------- левая колонка ---------------- -->
+        <section class="col-main">
+          <div id="round-card" class="card round-card"></div>
+
+          <div class="card">
+            <div class="card-head">
+              <h2>Таблица лидеров</h2>
+              <div id="stats-line" class="muted small"></div>
+            </div>
+            <div id="scoreboard" class="scoreboard"></div>
+            <div class="board-foot">
+              <button id="add-player" class="ghost-btn">+ добавить ник вручную</button>
+              <span class="muted small">очки можно править кнопками − / + или нажав на число</span>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <h2>История раундов</h2>
+              <button id="clear-history" class="ghost-btn danger small-btn">очистить историю</button>
+            </div>
+            <div id="history" class="history"></div>
+          </div>
+        </section>
+
+        <!-- ---------------- правая колонка ---------------- -->
+        <section class="col-side">
+          <div class="card chat-card">
+            <div class="card-head">
+              <h2>Чат</h2>
+              <span id="chat-status" class="muted small"></span>
+            </div>
+            <div id="chat" class="chat"></div>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h2>Слова-голоса</h2></div>
+            <label class="field">
+              <span>Голос за победу (через запятую)</span>
+              <input id="words-win" type="text" placeholder="win" />
+            </label>
+            <label class="field">
+              <span>Голос за поражение (через запятую)</span>
+              <input id="words-lose" type="text" placeholder="lose" />
+            </label>
+            <label class="switch">
+              <input type="checkbox" id="revote-toggle" />
+              <span>Разрешить переголосовать (считается последнее слово зрителя)</span>
+            </label>
+            <p class="muted small" id="words-hint">
+              Голосом считается сообщение целиком: <b>Win</b>, <b>WIN!</b>, <b>:KEKwAIT: lose</b>.
+              Фраза «я за win» голосом не считается.
+            </p>
+          </div>
+
+          <details class="card settings-card">
+            <summary>Данные и подключение</summary>
+            <div class="settings-body">
+              <div class="row">
+                <button id="export-btn" class="ghost-btn">Скачать резервную копию</button>
+                <button id="import-btn" class="ghost-btn">Загрузить копию</button>
+                <button id="reset-all" class="ghost-btn danger">Сбросить всё</button>
+              </div>
+              <input id="import-file" type="file" accept="application/json" hidden />
+              <hr />
+              <label class="field">
+                <span>Свой прокси для чата (необязательно)</span>
+                <input id="proxy-input" type="text" placeholder="https://мой-прокси.workers.dev/?url={url}" spellcheck="false" />
+              </label>
+              <label class="field">
+                <span>Частота проверки чата, секунды</span>
+                <input id="poll-input" type="number" min="3" max="30" step="1" />
+              </label>
+              <p class="muted small" id="proxy-hint">
+                Чат читается через публичный прокси (r.jina.ai). Если он начнёт отвечать медленно,
+                можно подставить свой — как это сделать, написано в инструкции.
+              </p>
+              <div id="settings-msg" class="muted small"></div>
+            </div>
+          </details>
+
+          <div class="card rules-card">
+            <div class="card-head"><h2>Как это работает</h2></div>
+            <ol class="rules">
+              <li>Жмёшь <b>«Начать голосование»</b> — с этой секунды сообщения считаются.</li>
+              <li>Зрители пишут слово-голос в чат. Видно, чей голос учтён, а чей нет.</li>
+              <li>Раунд закончился — жмёшь <b class="win">Победа</b> или <b class="lose">Поражение</b>.</li>
+              <li>Угадавшим +1 очко. Очки можно править вручную в любой момент.</li>
+            </ol>
+            <p class="muted small">
+              Очки и настройки хранятся только у тебя в браузере: если открыть сайт на другом
+              устройстве, таблица будет своя. Сделай резервную копию, чтобы перенести.
+            </p>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div id="toast" class="toast" hidden></div>
+
+    <script src="./config.js"></script>
+    <script src="./core.js"></script>
+    <script src="./app.js" defer></script>
+  </body>
+</html>
