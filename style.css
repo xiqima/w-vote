@@ -5,7 +5,10 @@
   --line: #232b3b;
   --text: #e8edf5;
   --muted: #8b98ad;
-  --accent: #f99e1a;
+  --accent: #ffffff;          /* акцент — белый, как на w.tv */
+  --accent-ink: #0b0e13;      /* текст на белом акценте */
+  --accent-soft: rgba(255, 255, 255, 0.12);
+  --accent-glow: rgba(255, 255, 255, 0.22);
   --win: #35d07f;
   --lose: #ff5c6c;
   --radius: 14px;
@@ -20,7 +23,7 @@ html, body {
   padding: 0;
   background:
     radial-gradient(1200px 600px at 15% -10%, #1b2436 0%, transparent 60%),
-    radial-gradient(900px 500px at 110% 0%, #2a1d12 0%, transparent 55%),
+    radial-gradient(900px 500px at 110% 0%, #1a2233 0%, transparent 55%),
     var(--bg);
   color: var(--text);
   font-family: "Inter", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
@@ -52,7 +55,7 @@ button { font: inherit; cursor: pointer; }
 .logo-mark {
   display: inline-grid; place-items: center;
   width: 34px; height: 34px; border-radius: 9px;
-  background: var(--accent); color: #131a22; font-size: 21px; line-height: 1;
+  background: var(--accent); color: var(--accent-ink); font-size: 21px; line-height: 1;
 }
 .logo-text { font-size: 24px; letter-spacing: 0.02em; }
 .logo.small .logo-mark { width: 26px; height: 26px; font-size: 16px; border-radius: 7px; }
@@ -69,10 +72,11 @@ button { font: inherit; cursor: pointer; }
 }
 .channel-form input:focus { border-color: var(--accent); }
 .channel-form button {
-  background: var(--accent); color: #171207; border: 0; border-radius: 11px;
+  background: linear-gradient(180deg, #ffffff, #dfe5ee); color: var(--accent-ink);
+  border: 0; border-radius: 11px;
   padding: 13px 22px; font-weight: 700; transition: transform 0.12s, filter 0.15s;
 }
-.channel-form button:hover { filter: brightness(1.07); }
+.channel-form button:hover { filter: brightness(0.95); }
 .channel-form button:active { transform: translateY(1px); }
 .channel-form button[disabled] { opacity: 0.6; cursor: progress; }
 .hint { color: var(--muted); font-size: 13px; margin: 12px 0 0; }
@@ -107,6 +111,16 @@ button { font: inherit; cursor: pointer; }
   margin-top: 14px; background: rgba(255, 92, 108, 0.12);
   border: 1px solid rgba(255, 92, 108, 0.4); color: #ffb3ba;
   border-radius: 10px; padding: 10px 13px; font-size: 13.5px; line-height: 1.5;
+}
+.error .muted, .error .probe-result { color: #d8bcc2; }
+.error .probe-result { margin-top: 10px; background: #16090c; border-color: rgba(255, 92, 108, 0.3); }
+.error summary { cursor: pointer; }
+.error .probe-result .win { color: #7ee0a1; }
+.error .probe-result .lose { color: #ff8d99; }
+/* ID канала — длинный UUID, должен переноситься на узких экранах */
+#channel-id-line code {
+  background: #0b1017; border: 1px solid var(--line); border-radius: 5px;
+  padding: 1px 5px; font-size: 12px; word-break: break-all;
 }
 
 /* ------------------------- рабочая панель ------------------------- */
@@ -161,8 +175,8 @@ button { font: inherit; cursor: pointer; }
 
 /* ------------------------- текущий раунд ------------------------- */
 .round-card { position: relative; overflow: hidden; }
-.round-card.open { border-color: rgba(249, 158, 26, 0.55); box-shadow: 0 0 0 1px rgba(249, 158, 26, 0.2), var(--shadow); }
-.round-card.awaiting { border-color: rgba(255, 209, 102, 0.5); box-shadow: 0 0 0 1px rgba(255, 209, 102, 0.16), var(--shadow); }
+.round-card.open { border-color: rgba(255, 255, 255, 0.5); box-shadow: 0 0 0 1px var(--accent-glow), var(--shadow); }
+.round-card.awaiting { border-color: rgba(203, 213, 225, 0.42); box-shadow: 0 0 0 1px rgba(203, 213, 225, 0.14), var(--shadow); }
 .round-top { display: flex; justify-content: space-between; align-items: center; gap: 14px; flex-wrap: wrap; }
 .round-title { display: flex; align-items: center; gap: 10px; font-size: 20px; font-weight: 750; }
 .badge {
@@ -170,10 +184,10 @@ button { font: inherit; cursor: pointer; }
   text-transform: uppercase; padding: 4px 9px; border-radius: 999px;
   border: 1px solid var(--line); color: var(--muted);
 }
-.badge.live { color: #171207; background: var(--accent); border-color: var(--accent); animation: pulse 1.8s infinite; }
+.badge.live { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); animation: pulse 1.8s infinite; }
 .badge.win { color: #062716; background: var(--win); border-color: var(--win); }
 .badge.lose { color: #2a0509; background: var(--lose); border-color: var(--lose); }
-.badge.await { color: #171207; background: #ffd166; border-color: #ffd166; }
+.badge.await { color: #0b0e13; background: #cbd5e1; border-color: #cbd5e1; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.62; } }
 .round-sub { color: var(--muted); font-size: 13px; margin-top: 6px; }
 
@@ -196,7 +210,8 @@ button { font: inherit; cursor: pointer; }
 }
 .btn:hover { filter: brightness(1.1); }
 .btn:active { transform: translateY(1px); }
-.btn.primary { background: var(--accent); color: #171207; border-color: transparent; }
+.btn.primary { background: linear-gradient(180deg, #ffffff, #dfe5ee); color: var(--accent-ink); border-color: transparent; }
+.btn.primary:hover { filter: brightness(0.95); }
 .btn.win { background: rgba(53, 208, 127, 0.16); color: #7df0b2; border-color: rgba(53, 208, 127, 0.5); }
 .btn.win:hover { background: rgba(53, 208, 127, 0.26); }
 .btn.lose { background: rgba(255, 92, 108, 0.16); color: #ff9aa4; border-color: rgba(255, 92, 108, 0.5); }
@@ -216,9 +231,9 @@ button { font: inherit; cursor: pointer; }
   display: grid; grid-template-columns: 32px 1fr auto auto; gap: 10px; align-items: center;
   padding: 8px 10px; border-radius: 9px; background: #121822;
 }
-.sb-row.top1 { background: linear-gradient(90deg, rgba(249, 158, 26, 0.18), #121822); }
+.sb-row.top1 { background: linear-gradient(90deg, rgba(255, 255, 255, 0.16), #121822); }
 .sb-row.top2 { background: linear-gradient(90deg, rgba(200, 214, 232, 0.13), #121822); }
-.sb-row.top3 { background: linear-gradient(90deg, rgba(196, 120, 60, 0.16), #121822); }
+.sb-row.top3 { background: linear-gradient(90deg, rgba(255, 255, 255, 0.06), #121822); }
 .sb-place { color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; font-size: 13px; }
 .sb-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .sb-name a { color: inherit; text-decoration: none; }
@@ -229,7 +244,7 @@ button { font: inherit; cursor: pointer; }
   background: none; border: 0; padding: 4px 6px; border-radius: 8px; min-width: 44px;
   transition: background 0.15s;
 }
-.sb-points:hover { background: rgba(249, 158, 26, 0.14); }
+.sb-points:hover { background: var(--accent-soft); }
 .sb-points small { font-size: 11px; color: var(--muted); font-weight: 500; margin-left: 2px; }
 .sb-edit { display: flex; gap: 4px; }
 .sb-edit button {

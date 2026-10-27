@@ -1,0 +1,8 @@
+#:schema node_modules/wrangler/config-schema.json
+name = "w-vote-proxy"
+main = "worker.js"
+compatibility_date = "2025-01-01"
+
+# Воркер не хранит данные: только добавляет CORS и браузерный User-Agent
+# к запросам profiles-service.w.tv / chats-service.w.tv.
+# Деплой:  npx wrangler deploy      (или кнопка Deploy to Cloudflare в README)

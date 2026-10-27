@@ -8,6 +8,7 @@ const {
   exportLeadersRows, exportRoundsRows, fetchAvatar, fetchMessages, fetchProfile, loadState,
   makeCsv, makeTxt, makeXlsx, normalizeChannelInput, parseWords, plural, probeProxies, proxyStatus, resetProxyOrder,
   roundPhase, saveState, tallyVotes, timeOf, uid, votesEnd, wordsToText,
+  clearProxyHealth, looksLikeUserId, preferredProxyId,
 } = window.WVote;
 
 const $ = (id) => document.getElementById(id);
@@ -50,8 +51,19 @@ function forgetProfileCache(nick) {
     localStorage.removeItem(PROFILE_CACHE_PREFIX + String(nick).toLowerCase());
   } catch {}
 }
-// свой прокси: из настроек страницы, иначе из config.js
-const proxyOf = (state) => (state?.settings?.proxy || window.WTV_DEFAULT_PROXY || '').trim();
+// свой прокси: из ссылки (?proxy=...), иначе из настроек канала, иначе из config.js.
+// Ссылка важна: стример настраивает прокси один раз и передаёт зрителям готовый
+// адрес — у них посредник подхватится сам, без всяких настроек.
+const proxyFromUrl = (() => {
+  try {
+    const value = new URLSearchParams(location.search).get('proxy');
+    return value ? value.trim() : '';
+  } catch {
+    return '';
+  }
+})();
+const proxyOf = (state) =>
+  (proxyFromUrl || state?.settings?.proxy || window.WTV_DEFAULT_PROXY || '').trim();
 const storageKey = () => `${STORAGE_KEY}:${app.channel || 'default'}`;
 // «текущий» раунд — тот, у которого ещё нет исхода (голосование или ожидание итога)
 const openRound = () => (app.state.rounds || []).find((r) => !r.outcome) || null;
@@ -78,7 +90,9 @@ async function connect(rawInput, options = {}) {
 
   // если этот канал уже подключался — берём его данные из памяти браузера
   // и не зависим от прокси при повторном заходе
-  const cached = readProfileCache(name);
+  // вставили ID канала (UUID/ULID) вместо ника — сервис профилей не нужен
+  const byId = looksLikeUserId(name);
+  const cached = byId ? null : readProfileCache(name);
   let profile = cached;
   let usedCache = false;
   if (cached && !options.refresh) {
@@ -86,14 +100,15 @@ async function connect(rawInput, options = {}) {
     usedCache = true;
   } else {
     profile = await fetchProfile(name, proxyOf(app.state));
-    writeProfileCache(name, { userId: profile.userId, nickname: profile.nickname });
+    if (!profile.byId) writeProfileCache(name, { userId: profile.userId, nickname: profile.nickname });
   }
   app.usedCache = usedCache;
-  app.channel = profile.nickname.toLowerCase();
+  app.channel = String(profile.nickname || name).toLowerCase();
   app.state = loadState(storageKey());
   app.state.channel = app.channel;
   app.state.channelUserId = profile.userId;
-  app.state.channelName = profile.nickname;
+  app.state.channelById = !!profile.byId;
+  app.state.channelName = profile.byId ? `ID ${profile.userId.slice(0, 8)}…` : profile.nickname || name;
   app.state.demo = false;
   if (app.state.avatarFor !== profile.userId) {
     app.state.avatarFor = profile.userId;
@@ -481,8 +496,9 @@ function paintAvatar() {
 function renderHeader() {
   const s = app.state;
   $('channel-name').textContent = s.demo ? 'Демо-режим' : s.channelName || s.channel;
-  $('channel-link').href = s.demo ? '#' : `https://w.tv/${s.channelName || s.channel}`;
+  $('channel-link').href = s.demo || s.channelById ? '#' : `https://w.tv/${s.channelName || s.channel}`;
   paintAvatar();
+  renderChannelId();
   const fin = s.rounds.filter((r) => r.outcome);
   const players = scoreboard();
   const liveCount = liveVotes().length;
@@ -502,6 +518,8 @@ function renderStatus() {
   else if (app.errors >= 3) parts.push('связь с чатом пропала — продолжаю пробовать');
   else if (app.lastError) parts.push('обновляю чат с задержкой…');
   else parts.push(app.usedCache ? 'чат читается (данные канала из памяти)' : 'чат читается');
+  const via = s.demo ? '' : proxyLabel(preferredProxyId());
+  if (via && !app.lastError) parts.push(`через ${via}`);
   if (last?.ts) parts.push(`последнее сообщение ${timeOf(last.ts)}`);
   el.textContent = parts.join(' · ');
   el.classList.toggle('live', !app.lastError);
@@ -759,6 +777,7 @@ function renderChat() {
 function syncSettingsInputs() {
   const s = app.state;
   renderProxyStatus();
+  renderChannelId();
   $('words-win').value = wordsToText(words().win);
   $('words-lose').value = wordsToText(words().lose);
   $('revote-toggle').checked = !!s.settings.allowRevote;
@@ -923,6 +942,71 @@ function toast(text, isError = false) {
 }
 
 // ---------------------------------------------------------------------------
+// Диагностика связи: понятный текст ошибки + отчёт по каждому посреднику
+// ---------------------------------------------------------------------------
+function proxyLabel(id) {
+  if (!id) return '';
+  const found = proxyStatus(proxyOf(app.state)).find((p) => p.id === id);
+  return found ? found.label : '';
+}
+
+/** человеческое объяснение, почему не подключилось */
+function networkHint(err) {
+  const details = (err && err.details) || [];
+  const text = details.join(' ; ');
+  const blocked = /HTTP 403|отклонил|отклонён|недоступен|Failed to fetch/i.test(text);
+  const slow = /не ответил|слишком медленно|timeout/i.test(text);
+  if (blocked && slow) {
+    return 'Часть посредников не пускает, часть не успела ответить. Чаще всего помогает VPN: включи его и нажми «Повторить».';
+  }
+  if (blocked) {
+    return 'Похоже, твоя сеть (или провайдер) не пропускает запросы к посредникам. Включи VPN и нажми «Повторить» — либо подними свой прокси, это 2 минуты.';
+  }
+  if (slow) {
+    return 'Посредники не успели ответить за 12 секунд. Нажми «Повторить» — или включи VPN: с ним посредники обычно отвечают быстрее.';
+  }
+  return 'Публичные посредники сейчас перегружены — это не ошибка в ссылке. Нажми «Повторить»: обычно помогает со второй попытки.';
+}
+
+function probeResultsHtml(results) {
+  return results
+    .map(
+      (r) =>
+        `<div>${r.ok ? '<span class="win">✓</span>' : '<span class="lose">✗</span>'} ${esc(r.label)} — ${r.ms} мс${
+          r.noNick ? ' <span class="muted small">(канал связи ок)</span>' : ''
+        }${r.ok ? '' : ` <span class="muted small">(${esc(r.error)})</span>`}</div>`
+    )
+    .join('');
+}
+
+/** проверяем все способы связи и рисуем отчёт в указанный блок */
+async function probeInto(container, nick) {
+  if (!container) return [];
+  container.hidden = false;
+  container.innerHTML = '<div class="muted small">Проверяю посредников — это занимает до 12 секунд…</div>';
+  clearProxyHealth(); // начинаем с чистого листа, иначе «пауза» искажает картину
+  const name = normalizeChannelInput(nick || app.state?.channel || '');
+  const url = `${window.WVote.PROFILES_API}/profiles/by-nickname/${encodeURIComponent(
+    name || 'w'
+  )}?user_lang=ru&platform=web`;
+  let results = [];
+  try {
+    results = await probeProxies(url, proxyOf(app.state));
+  } catch (err) {
+    container.innerHTML = `<div class="muted small">Проверка не удалась: ${esc(String(err && err.message))}</div>`;
+    return results;
+  }
+  const anyOk = results.some((r) => r.ok);
+  container.innerHTML =
+    probeResultsHtml(results) +
+    (anyOk
+      ? '<div class="muted small" style="margin-top:6px">Связь есть — жми «Повторить», чат должен подтянуться.</div>'
+      : '<div class="muted small" style="margin-top:6px">Ни один посредник не ответил с твоего подключения. Поможет VPN или свой прокси — инструкция в блоке «Что делать?».</div>');
+  renderProxyStatus();
+  return results;
+}
+
+// ---------------------------------------------------------------------------
 // События интерфейса
 // ---------------------------------------------------------------------------
 async function submitChannel(inputValue, options = {}) {
@@ -937,6 +1021,7 @@ async function submitChannel(inputValue, options = {}) {
     await connect(inputValue, options);
     return true;
   } catch (err) {
+    if (options.silent) return false; // тихая попытка автоподключения — ошибку покажет следующая
     const name = normalizeChannelInput(inputValue);
     if (err.code === 'channel_not_found') {
       errEl.innerHTML = `Канал «${esc(name)}» не найден на w.tv. Проверь ник — он виден в адресе канала.`;
@@ -944,17 +1029,43 @@ async function submitChannel(inputValue, options = {}) {
       errEl.innerHTML = 'Введи ник или ссылку на канал.';
     } else {
       errEl.innerHTML = `
-        <b>Не удалось получить данные канала.</b><br>
-        Скорее всего, публичный прокси сейчас перегружен — это не ошибка в ссылке.
-        Нажми «Повторить»: обычно помогает со второй попытки.
+        <b>Не удалось получить данные канала.</b>
+        <div class="small" style="margin-top:6px">${esc(networkHint(err))}</div>
         <div class="row" style="margin-top:10px">
           <button type="button" id="retry-connect" class="ghost-btn">Повторить</button>
+          <button type="button" id="probe-connect" class="ghost-btn">Проверить связь</button>
           <button type="button" id="toggle-proxy-help" class="ghost-btn">Что делать, если не помогает?</button>
         </div>
-        <div class="muted small" style="margin-top:8px">Подробности: ${esc(String(err.message || err).slice(0, 220))}</div>`;
+        <div id="connect-probe" class="probe-result" hidden></div>
+        <details class="small" style="margin-top:10px">
+          <summary class="muted">Подробности для диагностики</summary>
+          <div class="muted small" style="margin-top:6px;word-break:break-word">${
+            (err.details && err.details.length
+              ? err.details
+              : [String(err.message || err)]
+            )
+              .slice(0, 8)
+              .map((line) => esc(String(line).slice(0, 200)))
+              .join('<br>')
+          }</div>
+          <div class="muted small">Страница: ${esc(location.origin || 'файл')} · ${esc(new Date().toLocaleString('ru-RU'))}</div>
+        </details>`;
       errEl.hidden = false;
+      // «Повторить» сбрасывает статистику сбоев: иначе все способы могут
+      // оказаться в «паузе» и попытка закончится, даже не начавшись
       const retry = $('retry-connect');
-      if (retry) retry.addEventListener('click', () => submitChannel(inputValue));
+      if (retry) retry.addEventListener('click', () => {
+        clearProxyHealth();
+        submitChannel(inputValue);
+      });
+      const probeBtn = $('probe-connect');
+      if (probeBtn) probeBtn.addEventListener('click', async () => {
+        probeBtn.disabled = true;
+        probeBtn.textContent = 'проверяю…';
+        await probeInto($('connect-probe'), name);
+        probeBtn.disabled = false;
+        probeBtn.textContent = 'Проверить связь';
+      });
       const toggle = $('toggle-proxy-help');
       if (toggle) toggle.addEventListener('click', () => {
         const help = $('proxy-help');
@@ -977,6 +1088,18 @@ async function submitChannel(inputValue, options = {}) {
 $('channel-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   await submitChannel($('channel-input').value);
+});
+
+// копирование ID канала (запасной способ подключения)
+document.addEventListener('click', async (e) => {
+  const btn = e.target.closest('[data-copy-id]');
+  if (!btn) return;
+  try {
+    await navigator.clipboard.writeText(btn.dataset.copyId);
+    toast('ID канала скопирован');
+  } catch {
+    toast('Браузер не дал доступ к буферу — скопируй вручную', true);
+  }
 });
 
 // копирование кода своего прокси
@@ -1061,44 +1184,74 @@ $('revote-toggle').addEventListener('change', (e) => {
   );
 });
 
+/** ID канала нужен как запасной путь подключения (когда сервис профилей недоступен) */
+function renderChannelId() {
+  const el = $('channel-id-line');
+  if (!el || !app.state) return;
+  const id = app.state.channelUserId;
+  if (!id || isDemo()) {
+    el.innerHTML = '';
+    return;
+  }
+  el.innerHTML =
+    `ID канала: <code>${esc(id)}</code> ` +
+    `<button type="button" class="link-btn" data-copy-id="${esc(id)}">копировать</button> ` +
+    `<span class="muted">— с ним сайт подключается, даже если сервис профилей не отвечает</span>`;
+}
+
 function renderProxyStatus() {
   const el = $('proxy-state');
   if (!el) return;
-  const list = proxyStatus();
+  const list = proxyStatus(proxyOf(app.state));
+  const via = proxyLabel(preferredProxyId());
+  const own = proxyOf(app.state);
   el.innerHTML =
+    (via ? `Сейчас работает: <span class="win">${esc(via)}</span><br>` : '') +
+    (own
+      ? `<span class="muted">Свой посредник: настроен${proxyFromUrl ? ' (из ссылки)' : ''}</span><br>`
+      : '') +
     'Способы связи: ' +
     list
-      .map((p) => `<span class="${p.cooling ? 'lose' : 'win'}">${esc(p.label)}${p.cooling ? ' (пауза)' : ''}</span>`)
+      .map(
+        (p) =>
+          `<span class="${p.cooling ? 'lose' : p.preferred ? 'win' : ''}">${esc(p.label)}${
+            p.cooling ? ' (пауза)' : ''
+          }</span>`
+      )
       .join(' · ') +
-    ' · <button type="button" id="probe-btn" class="link-btn">проверить связь</button>';
+    ' · <button type="button" id="probe-btn" class="link-btn">проверить связь</button>' +
+    ' · <button type="button" id="net-reset-btn" class="link-btn">сбросить выбор</button>' +
+    (own ? ' · <button type="button" id="share-btn" class="link-btn">ссылка для зрителей</button>' : '');
+  const share = $('share-btn');
+  if (share) share.addEventListener('click', () => {
+    const url = new URL(location.href);
+    if (app.state?.channel) url.searchParams.set('c', app.state.channel);
+    url.searchParams.set('proxy', own);
+    const link = url.toString();
+    navigator.clipboard
+      .writeText(link)
+      .then(() => toast('Ссылка скопирована — по ней твой посредник подхватится у зрителей сам'))
+      .catch(() => toast('Браузер не дал доступ к буферу — скопируй адрес из строки браузера', true));
+  });
   const btn = $('probe-btn');
   if (btn) btn.addEventListener('click', runProbe);
+  const reset = $('net-reset-btn');
+  if (reset) reset.addEventListener('click', () => {
+    clearProxyHealth();
+    renderProxyStatus();
+    toast('Связь будет проверена заново, со всех способов сразу');
+    pollNow();
+  });
 }
 
 async function runProbe() {
   const btn = $('probe-btn');
   const out = $('probe-result');
-  if (!app.state) return;
+  if (!app.state || !btn) return;
   btn.disabled = true;
   btn.textContent = 'проверяю…';
   out.hidden = false;
-  out.innerHTML = 'Проверяю каждый способ по очереди — это занимает до 20 секунд…';
-  const url = `${'https://profiles-service.w.tv/api/v1'}/profiles/by-nickname/${encodeURIComponent(
-    app.state.channel
-  )}?user_lang=ru&platform=web`;
-  const results = await probeProxies(url, proxyOf(app.state));
-  out.innerHTML = results
-    .map(
-      (r) =>
-        `<div>${r.ok ? '<span class="win">✓</span>' : '<span class="lose">✗</span>'} ${esc(r.label)} — ${r.ms} мс${r.noNick ? ' <span class="muted small">(канал связи ок)</span>' : ''}${
-          r.ok ? '' : ` <span class="muted small">(${esc(r.error)})</span>`
-        }</div>`
-    )
-    .join('');
-  const anyOk = results.some((r) => r.ok);
-  out.innerHTML += anyOk
-    ? '<div class="muted small" style="margin-top:6px">Связь есть — чат должен читаться.</div>'
-    : '<div class="muted small" style="margin-top:6px">Ни один способ не ответил. Поможет свой прокси — инструкция на странице подключения.</div>';
+  await probeInto(out, app.state.channel);
   btn.disabled = false;
   btn.textContent = 'проверить связь';
 }
@@ -1174,10 +1327,11 @@ window.addEventListener('beforeunload', () => persist());
     $('channel-input').value = fromUrl;
     // автоподключение по ссылке: пробуем несколько раз, прежде чем показать ошибку
     (async () => {
-      for (let attempt = 0; attempt < 3; attempt++) {
-        const ok = await submitChannel(fromUrl);
+      for (let attempt = 0; attempt < 2; attempt++) {
+        clearProxyHealth(); // каждая попытка — с чистого листа, без «пауз»
+        const ok = await submitChannel(fromUrl, { silent: attempt === 0 });
         if (ok) return;
-        await new Promise((r) => setTimeout(r, 1200 * (attempt + 1)));
+        await new Promise((r) => setTimeout(r, 800));
       }
     })();
     return;
@@ -1189,10 +1343,11 @@ window.addEventListener('beforeunload', () => persist());
   if (last) {
     $('channel-input').value = `https://w.tv/${last}`;
     (async () => {
-      for (let attempt = 0; attempt < 3; attempt++) {
-        const ok = await submitChannel(`https://w.tv/${last}`);
+      for (let attempt = 0; attempt < 2; attempt++) {
+        clearProxyHealth();
+        const ok = await submitChannel(`https://w.tv/${last}`, { silent: attempt === 0 });
         if (ok) return;
-        await new Promise((r) => setTimeout(r, 1200 * (attempt + 1)));
+        await new Promise((r) => setTimeout(r, 800));
       }
     })();
     return;
