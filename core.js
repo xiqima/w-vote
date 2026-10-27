@@ -185,6 +185,7 @@ function computeScores(rounds, adjust = {}, extra = []) {
 // 6. Хранилище: только этот браузер, переживает обновление страницы
 // ---------------------------------------------------------------------------
 const STORAGE_KEY = 'wtv_vote_v2';
+const STORAGE_PREFIX = 'wtv_vote'; // все наши ключи начинаются с этого
 
 function migrateRound(r) {
   if (!r || typeof r !== 'object') return null;
@@ -296,11 +297,11 @@ function rawJson(text) {
 }
 
 /**
- * Список способов добраться до API w.tv.
+ * ПОЛНЫЙ список способов добраться до API w.tv — без учёта галочек в настройках.
  * Порядок не важен для скорости (все пробуются одновременно), но важен для
  * диагностики: сверху — самые надёжные. «Свой прокси» всегда первый.
  */
-function proxies(customProxy) {
+function proxyCatalog(customProxy) {
   const list = [];
   if (customProxy && String(customProxy).trim()) {
     const template = String(customProxy).trim();
@@ -362,16 +363,32 @@ function proxies(customProxy) {
   return list;
 }
 
+/**
+ * Способы, РАЗРЕШЁННЫЕ галочками в настройках.
+ * По умолчанию включены все (в настройках хранятся только выключенные),
+ * поэтому новые посредники появляются у людей сами.
+ */
+function proxies(customProxy) {
+  // свой прокси берём из аргумента, а если его нет — из настроек браузера
+  const own = String(customProxy || '').trim() || globalProxy();
+  return proxyCatalog(own).filter((p) => isProxyEnabled(p.id));
+}
+
 // --- состояние сети: рабочий способ + «здоровье» каждого -------------------
 let netState = null;
 
 function netLoad() {
   if (netState) return netState;
-  netState = { preferred: null, health: {} };
+  netState = { preferred: null, health: {}, proxy: '', enabled: {} };
   try {
     const raw = JSON.parse(localStorage.getItem(NET_KEY) || 'null');
     if (raw && typeof raw === 'object') {
       if (typeof raw.preferred === 'string') netState.preferred = raw.preferred;
+      if (typeof raw.proxy === 'string') netState.proxy = raw.proxy;
+      if (raw.enabled && typeof raw.enabled === 'object') {
+        // храним только выключенные: enabled[id] === false
+        for (const id of Object.keys(raw.enabled)) if (raw.enabled[id] === false) netState.enabled[id] = false;
+      }
       if (raw.health && typeof raw.health === 'object') {
         for (const id of Object.keys(raw.health)) {
           const h = raw.health[id] || {};
@@ -428,10 +445,59 @@ function resetProxyOrder() {
   netSave();
 }
 
-/** полный сброс: «проверить связь» и кнопка «Повторить» начинают с чистого листа */
+/** полный сброс статистики: «проверить связь» и «Повторить» начинают с чистого листа */
 function clearProxyHealth() {
-  netState = { preferred: null, health: {} };
+  const net = netLoad();
+  net.preferred = null;
+  net.health = {};
   netSave();
+}
+
+// --- настройки подключения: свой прокси и галочки «какие способы использовать»
+// Они общие для всего браузера (это свойство сети, а не канала), поэтому лежат
+// в NET_KEY, а не в состоянии канала.
+
+/** адрес своего прокси, заданный в настройках (без учёта config.js и ссылки) */
+function globalProxy() {
+  return String(netLoad().proxy || '').trim();
+}
+
+function setGlobalProxy(text) {
+  const net = netLoad();
+  net.proxy = String(text || '').trim();
+  netSave();
+}
+
+/** включён ли способ связи (по умолчанию — да) */
+function isProxyEnabled(id) {
+  return netLoad().enabled[id] !== false;
+}
+
+function setProxyEnabled(id, enabled) {
+  const net = netLoad();
+  if (enabled) delete net.enabled[id];
+  else net.enabled[id] = false;
+  if (!enabled && net.preferred === id) net.preferred = null;
+  netSave();
+}
+
+/**
+ * «Сбросить всё» — как будто сайт открыли впервые: стираем ВСЕ свои ключи
+ * localStorage (каналы, раунды, кэш профилей, настройки связи).
+ * Чужие ключи других сайтов не трогаем: localStorage у каждого сайта свой.
+ * @returns {number} сколько ключей удалено
+ */
+function resetEverything() {
+  const keys = [];
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith(STORAGE_PREFIX)) keys.push(key);
+    }
+    for (const key of keys) localStorage.removeItem(key);
+  } catch {}
+  netState = null; // сбрасываем и кэш в памяти
+  return keys.length;
 }
 
 /** ошибка связи с понятным текстом и списком подробностей по каждому способу */
@@ -548,6 +614,13 @@ function raceProxies(list, targetUrl, timeoutMs, staggerMs = 250) {
  */
 async function requestViaProxy(targetUrl, customProxy, timeoutMs = 12000) {
   const all = proxies(customProxy);
+  if (!all.length) {
+    throw netError(
+      'все способы связи выключены в настройках — включи хотя бы один (или задай свой прокси)',
+      'no-proxies',
+      ['все способы связи выключены в настройках — включи хотя бы один (или задай свой прокси)']
+    );
+  }
   const net = netLoad();
   const preferred = net.preferred ? all.find((p) => p.id === net.preferred) : null;
   const healthy = all.filter((p) => !proxyCooling(p.id));
@@ -638,12 +711,14 @@ async function probeProxies(targetUrl, customProxy, timeoutMs = 12000) {
   return results.sort((a, b) => (a.ok === b.ok ? a.ms - b.ms : a.ok ? -1 : 1));
 }
 
-/** какие способы сейчас в игре — для диагностики в интерфейсе */
+/** все способы связи и их состояние — для галочек и диагностики в интерфейсе */
 function proxyStatus(customProxy) {
   const net = netLoad();
-  return proxies(customProxy && String(customProxy).trim() ? customProxy : '').map((p) => ({
+  const own = String(customProxy || '').trim() || globalProxy();
+  return proxyCatalog(own).map((p) => ({
     id: p.id,
     label: p.label,
+    enabled: isProxyEnabled(p.id),
     cooling: proxyCooling(p.id),
     preferred: net.preferred === p.id,
     fails: proxyHealth(p.id).fails,
@@ -1040,6 +1115,12 @@ function plural(n, one, few, many) {
 window.WVote = {
   probeProxies,
   proxyStatus,
+  proxyCatalog,
+  globalProxy,
+  setGlobalProxy,
+  isProxyEnabled,
+  setProxyEnabled,
+  resetEverything,
   preferredProxyId,
   clearProxyHealth,
   looksLikeUserId,

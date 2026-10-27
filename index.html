@@ -27,6 +27,33 @@
         <p class="hint">Вставь ссылку на свой канал, ник или @ник. Регистрация не нужна.</p>
 
         <div id="landing-error" class="error" hidden></div>
+
+        <details id="landing-settings" class="settings-block">
+          <summary>Настройки связи: посредники, свой прокси, сброс</summary>
+          <div class="settings-inner">
+            <p class="muted small">
+              Чат w.tv можно прочитать только через посредника. Ниже — какие посредники использовать
+              и свой адрес, если он есть. Настройки общие для этого браузера и не зависят от канала.
+            </p>
+            <label class="field">
+              <span>Свой прокси для чата (необязательно)</span>
+              <input id="landing-proxy-input" type="text" placeholder="https://мой-прокси.workers.dev/?url={url}" spellcheck="false" />
+            </label>
+            <span class="field-label">Какие посредники использовать</span>
+            <div class="proxy-choices" data-proxy-choices></div>
+            <p class="muted small">
+              По умолчанию включены все: сайт проверяет их одновременно и берёт первый ответ.
+              Сними галочку, если посредник мешает (например, отдаёт «лимит запросов»).
+            </p>
+            <div class="row">
+              <button type="button" class="ghost-btn" id="landing-probe-btn">Проверить связь</button>
+              <button type="button" class="ghost-btn danger" data-reset-everything>
+                Сбросить всё (как в первый раз)
+              </button>
+            </div>
+            <div id="landing-probe-result" class="probe-result" hidden></div>
+          </div>
+        </details>
         <p id="proxy-hint-line" class="muted small" hidden>
           Не помогло? Ниже — как поднять свой прокси за 2 минуты (бесплатно и без программ).
         </p>
@@ -197,7 +224,10 @@
               <div class="row">
                 <button id="export-btn" class="ghost-btn">Скачать копию</button>
                 <button id="import-btn" class="ghost-btn">Загрузить копию</button>
-                <button id="reset-all" class="ghost-btn danger">Сбросить всё</button>
+                <button id="reset-all" class="ghost-btn danger">Сбросить данные канала</button>
+                <button type="button" class="ghost-btn danger" data-reset-everything>
+                  Сбросить всё полностью
+                </button>
               </div>
               <input id="import-file" type="file" accept="application/json" hidden />
               <hr />
@@ -205,6 +235,12 @@
                 <span>Свой прокси для чата (необязательно)</span>
                 <input id="proxy-input" type="text" placeholder="https://мой-прокси.workers.dev/?url={url}" spellcheck="false" />
               </label>
+              <span class="field-label">Какие посредники использовать</span>
+              <div class="proxy-choices" data-proxy-choices></div>
+              <p class="muted small">
+                По умолчанию включены все. Галочки общие для браузера — этот же список есть на
+                странице подключения.
+              </p>
               <label class="field">
                 <span>Частота проверки чата, секунды</span>
                 <input id="poll-input" type="number" min="3" max="30" step="1" />
