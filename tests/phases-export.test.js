@@ -102,17 +102,61 @@ const scores = WV.computeScores(rounds);
 
 check('лист «Лидеры»: шапка и строки по очкам', () => {
   const rows = WV.exportLeadersRows(scores);
-  eq(rows[0], ['Место', 'Ник', 'Очки', 'Угадал', 'Голосовал', 'Серия подряд', 'Правка вручную']);
+  eq(rows[0], ['Место', 'Ник', 'Очки', 'Угадал', 'Рулетка', 'Голосовал', 'Серия подряд', 'Правка вручную']);
   eq(rows.slice(1).map((r) => r[0]), [1, 2, 3]);
   eq(rows.slice(1).map((r) => r[2]), [1, 1, 0]);
   // при равных очках — по нику (Orio раньше noxir), никто не теряется
   eq(rows.slice(1).map((r) => r[1]), ['Orio', 'noxir', 'dyson']);
+  eq(rows.slice(1).map((r) => r[4]), [0, 0, 0]); // побед в рулетке пока нет
 });
-check('лист «Раунды»: голоса по словам и исход', () => {
+check('лист «Раунды»: режим, голоса по вариантам и исход', () => {
   const rows = WV.exportRoundsRows(rounds, { win: ['win'], lose: ['lose'] });
-  eq(rows[0].slice(0, 3), ['№', 'Начало', 'Голоса до']);
-  eq(rows[1].slice(4), [2, 1, 3, 2]); // win / lose / всего / угадали
-  eq(rows[2][3], 'не объявлен');
+  eq(rows[0].slice(0, 5), ['№', 'Режим', 'Начало', 'Голоса до', 'Итог']);
+  eq(rows[1][1], 'победа/поражение');
+  eq(rows[1][4], 'победа');
+  eq(rows[1][5], 'win — 2 · lose — 1');
+  eq(rows[1].slice(6), [3, 2]); // всего голосов / угадали
+  eq(rows[2][4], 'не объявлен');
+});
+check('лист «Раунды»: опрос и рулетка', () => {
+  const poll = {
+    index: 3,
+    mode: 'poll',
+    openedAt: T(30),
+    votesClosedAt: T(35),
+    outcome: 'p2',
+    options: [
+      { key: 'p1', label: 'да', words: ['да'] },
+      { key: 'p2', label: 'нет', words: ['нет'] },
+    ],
+    votes: [
+      { userId: 'u1', nickname: 'noxir', vote: 'p1' },
+      { userId: 'u2', nickname: 'dyson', vote: 'p2' },
+    ],
+  };
+  const roll = {
+    index: 4,
+    mode: 'roll',
+    openedAt: T(40),
+    votesClosedAt: T(45),
+    outcome: null,
+    entryWords: ['+'],
+    awardWinner: true,
+    winner: { userId: 'u3', nickname: 'Orio' },
+    votes: [
+      { userId: 'u1', nickname: 'noxir', vote: 'enter' },
+      { userId: 'u3', nickname: 'Orio', vote: 'enter' },
+    ],
+  };
+  const rows = WV.exportRoundsRows([poll, roll]);
+  eq(rows[1][1], 'опрос');
+  eq(rows[1][4], 'нет');
+  eq(rows[1][5], 'да — 1 · нет — 1');
+  eq(rows[1][7], 1);
+  eq(rows[2][1], 'рулетка');
+  eq(rows[2][4], 'рулетка: Orio');
+  eq(rows[2][5], '+ — 2');
+  eq(rows[2][7], '—'); // в рулетке «угадавших» нет
 });
 check('CSV: BOM, «;» и экранирование кавычек', () => {
   const csv = WV.makeCsv([

@@ -189,7 +189,10 @@ function reply(body, status = 200) {
     await check('пустое хранилище даёт состояние по умолчанию', () => {
       const st = WV.loadState('нет-такого-ключа');
       eq(st.version, 2);
-      eq(st.settings.words, { win: ['win'], lose: ['lose'] });
+      eq(st.settings.mode, 'poll');
+      eq(st.settings.pollOptions.length, 2);
+      eq(st.settings.pointsPerWin, 1);
+      eq(st.settings.words, undefined); // классики в настройках больше нет
       assert(Array.isArray(st.rounds));
     });
   }
