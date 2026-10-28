@@ -872,7 +872,9 @@ function renderStatus() {
 
 // --- текущий раунд ---------------------------------------------------------
 function modeBadge(mode, always = false) {
-  const id = normalizeMode(mode);
+  // normalizeMode() здесь не подходит: она годится только для настроек и
+  // превратила бы старый раунд классики в «опрос»
+  const id = mode === 'roll' || mode === 'classic' ? mode : 'poll';
   // у классики режим по умолчанию, поэтому в карточке раунда его не дублируем
   if (!always && id === 'classic') return '';
   return `<span class="badge mode">${esc(MODE_INFO[id])}</span>`;
