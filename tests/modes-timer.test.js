@@ -404,6 +404,11 @@ check('normalizeSettings: очки классики переносятся в в
   eq(s.words, undefined);
   eq(s.pollOptions.map((o) => o.words), [['победа'], ['луз']]);
 });
+check('normalizeSettings: классика со стандартными словами тоже переносится', () => {
+  const s = WV.normalizeSettings({ mode: 'classic' });
+  eq(s.mode, 'poll');
+  eq(s.pollOptions.map((o) => o.words), [['win'], ['lose']]);
+});
 check('normalizeSettings: таймер, режим и очки по умолчанию', () => {
   const s = WV.normalizeSettings({ allowRevote: true });
   eq(s.mode, 'poll');

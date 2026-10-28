@@ -525,20 +525,20 @@ function normalizeSettings(settings) {
   const s = { ...defaultSettings(), ...raw };
   s.mode = normalizeMode(raw.mode);
 
-  // Старый режим «победа / поражение» убран. Если слова классики меняли,
-  // переносим их в варианты опроса, чтобы ничего не потерялось.
+  // Старый режим «победа / поражение» убран. Его два набора слов становятся
+  // двумя вариантами опроса — так у обновившихся ничего не меняется,
+  // включая привычные win/lose.
   const legacyWin = Array.isArray(raw.words?.win)
     ? raw.words.win.map((w) => normalizeWord(w)).filter(Boolean)
     : [];
   const legacyLose = Array.isArray(raw.words?.lose)
     ? raw.words.lose.map((w) => normalizeWord(w)).filter(Boolean)
     : [];
-  const legacyCustom =
-    legacyWin.length &&
-    legacyLose.length &&
-    !(legacyWin.length === 1 && legacyWin[0] === 'win' && legacyLose.length === 1 && legacyLose[0] === 'lose');
-  if ((raw.mode === 'classic' || !raw.mode) && legacyCustom) {
-    s.pollOptions = normalizePollOptions([{ words: legacyWin }, { words: legacyLose }]);
+  if (raw.mode === 'classic' || !raw.mode) {
+    s.pollOptions = normalizePollOptions([
+      { words: legacyWin.length ? legacyWin : ['win'] },
+      { words: legacyLose.length ? legacyLose : ['lose'] },
+    ]);
   } else {
     s.pollOptions = normalizePollOptions(s.pollOptions);
   }
