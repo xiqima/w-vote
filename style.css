@@ -199,6 +199,7 @@ button { font: inherit; cursor: pointer; }
 .round-card { position: relative; overflow: hidden; }
 .round-card.open { border-color: rgba(255, 255, 255, 0.5); box-shadow: 0 0 0 1px var(--accent-glow), var(--shadow); }
 .round-card.awaiting { border-color: rgba(203, 213, 225, 0.42); box-shadow: 0 0 0 1px rgba(203, 213, 225, 0.14), var(--shadow); }
+.round-card.ready { border-color: rgba(199, 210, 224, 0.38); box-shadow: 0 0 0 1px rgba(199, 210, 224, 0.1), var(--shadow); }
 .round-top { display: flex; justify-content: space-between; align-items: center; gap: 14px; flex-wrap: wrap; }
 .round-title { display: flex; align-items: center; gap: 10px; font-size: 20px; font-weight: 750; }
 .badge {
@@ -391,7 +392,16 @@ hr { border: 0; border-top: 1px solid var(--line); margin: 2px 0; width: 100%; }
 .mode-body .field:last-of-type { margin-bottom: 8px; }
 
 /* --- варианты опроса ------------------------------------------------------ */
-.poll-options { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 10px; }
+.poll-options {
+  display: flex; flex-direction: column; gap: 8px; margin: 8px 0 10px;
+  max-height: 46vh; overflow-y: auto; padding-right: 4px;
+}
+.poll-head {
+  display: flex; justify-content: space-between; align-items: baseline;
+  gap: 8px; flex-wrap: wrap; margin-bottom: 6px;
+}
+#poll-count { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.poll-auto-row { margin-top: 12px; }
 .poll-opt { display: flex; gap: 8px; align-items: center; }
 .poll-opt input {
   flex: 1 1 auto; min-width: 0;
@@ -603,4 +613,99 @@ input.invalid, .field input.invalid {
 }
 @media (prefers-reduced-motion: reduce) {
   .round-card.reveal .result-banner { animation: none; }
+}
+
+/* =========================================================================
+   ОЧКИ ЗА РАУНД, ГОТОВЫЙ РАУНД, БЛОКИРОВКА РЕЖИМА, НОВЫЕ АНИМАЦИИ РУЛЕТКИ
+   ========================================================================= */
+.points-field { margin-top: 14px; margin-bottom: 6px; }
+.points-field input { max-width: 130px; font-variant-numeric: tabular-nums; }
+#points-hint { line-height: 1.5; }
+
+.mode-lock {
+  margin: -4px 0 12px; padding: 8px 11px; border-radius: 10px;
+  background: rgba(255, 209, 102, 0.08); border: 1px solid rgba(255, 209, 102, 0.3);
+  color: #ffd98c; font-size: 12.5px; line-height: 1.45;
+}
+.mode-tab[disabled] { opacity: 0.55; cursor: not-allowed; }
+.mode-tab[disabled]:hover { background: none; color: var(--muted); }
+.mode-tab.active[disabled] { opacity: 0.8; }
+.mode-tab.active[disabled]:hover { background: #1d2534; color: #fff; }
+.mode-card.locked .mode-tabs { border-color: rgba(255, 209, 102, 0.28); }
+
+.badge.ready { color: #0b0e13; background: #c7d2e0; border-color: #c7d2e0; }
+
+.ready-box {
+  margin-top: 14px; padding: 12px 14px; border-radius: 14px;
+  border: 1px dashed var(--line); background: rgba(255, 255, 255, 0.02);
+  display: flex; flex-direction: column; gap: 10px;
+}
+.ready-box .voters { margin-top: 0; }
+
+/* много вариантов: и в подсчёте, и в кнопках */
+.vote-counts.many {
+  max-height: 92px; overflow-y: auto; align-content: flex-start;
+  padding-right: 4px; font-size: 13px;
+}
+.voters.many { max-height: 92px; overflow-y: auto; }
+.outcome-list { flex: 1 1 100%; display: flex; flex-wrap: wrap; gap: 8px; }
+.outcome-list.many { max-height: 220px; overflow-y: auto; padding-right: 4px; }
+.outcome-list .btn.opt { padding: 9px 14px; font-size: 13.5px; }
+
+/* --- рулетка: несколько анимаций прокрутки -------------------------------- */
+.roll-stage.spinning { animation: stageGlow 0.85s ease-in-out infinite alternate; }
+@keyframes stageGlow {
+  from { box-shadow: 0 0 0 0 rgba(255, 209, 102, 0); border-color: rgba(255, 209, 102, 0.35); }
+  to { box-shadow: 0 0 28px -6px var(--spin-tone, #ffd166); border-color: rgba(255, 209, 102, 0.8); }
+}
+.roll-slot.spin-slot { animation: slotPulse 0.22s ease-in-out infinite alternate; }
+
+.roll-slot.spin-blur { animation: slotBlur 0.55s ease-in-out infinite alternate; }
+@keyframes slotBlur {
+  from { filter: blur(6px); opacity: 0.65; transform: translateY(-3px) scale(0.97); }
+  to { filter: blur(1.2px); opacity: 1; transform: translateY(3px) scale(1.02); }
+}
+
+.roll-slot.spin-flip { animation: slotFlip 0.44s ease-in-out infinite; backface-visibility: hidden; }
+@keyframes slotFlip {
+  0% { transform: rotateX(0deg); }
+  45% { transform: rotateX(82deg); opacity: 0.5; }
+  55% { transform: rotateX(-82deg); opacity: 0.5; }
+  100% { transform: rotateX(0deg); }
+}
+
+.roll-slot.spin-zoom { animation: slotZoom 0.32s ease-in-out infinite alternate; }
+@keyframes slotZoom {
+  from { transform: scale(0.86); color: #fff6da; filter: brightness(1.18); }
+  to { transform: scale(1.1); color: var(--gold); }
+}
+
+.roll-slot.spin-shake { animation: slotShake 0.16s linear infinite; }
+@keyframes slotShake {
+  0%, 100% { transform: translateX(-3px) rotate(-0.6deg); }
+  50% { transform: translateX(3px) rotate(0.6deg); }
+}
+
+.roll-stage.settled { animation: stageSettle 0.5s ease-out; }
+@keyframes stageSettle {
+  0% { transform: scale(1); }
+  35% { transform: scale(1.015); box-shadow: 0 0 36px -4px var(--spin-tone, #ffd166); }
+  100% { transform: scale(1); box-shadow: none; }
+}
+.roll-slot.settled { animation: slotSettle 0.5s cubic-bezier(0.2, 1.4, 0.4, 1); }
+@keyframes slotSettle {
+  0% { transform: scale(0.78); opacity: 0.35; }
+  55% { transform: scale(1.12); opacity: 1; }
+  100% { transform: scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .roll-stage.spinning,
+  .roll-stage.settled,
+  .roll-slot.spinning,
+  .roll-slot.spin-blur,
+  .roll-slot.spin-flip,
+  .roll-slot.spin-zoom,
+  .roll-slot.spin-shake,
+  .roll-slot.settled { animation: none; }
 }

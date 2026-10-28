@@ -4,7 +4,7 @@
 (function () {
 'use strict';
 const {
-  DEFAULT_WORDS, STORAGE_KEY, colorFor, computeScores, countByOption, dateTimeOf, defaultPollOptions,
+  STORAGE_KEY, colorFor, computeScores, countByOption, dateTimeOf, defaultPollOptions,
   emptyState, esc, exportLeadersRows, exportRoundsRows, fetchAvatar, fetchMessages, fetchProfile,
   formatDuration, loadState, makeCsv, makeTxt, makeXlsx, modeLabel, normalizeChannelInput,
   migrateRound, normalizeMode, normalizePollOptions, normalizeSettings, parseWords, pickWinner, plural,
@@ -12,23 +12,31 @@ const {
   roundDeadline, roundTimeLeft, roundTimerSeconds, saveState, tallyVotes, timeOf, uid, voteKeyFor, votesEnd,
   wordsToText, clampTimerSeconds, clearProxyHealth, looksLikeUserId, preferredProxyId,
   globalProxy, setGlobalProxy, proxyStatus: proxyStatusOf, setProxyEnabled, resetEverything,
+  MAX_POLL_OPTIONS, pollLeader, clampPoints, roundPoints,
 } = window.WVote;
 
 const $ = (id) => document.getElementById(id);
 const LAST_CHANNEL_KEY = 'wtv_vote_last_channel';
 const MAX_MESSAGES = 800; // сколько сообщений чата запоминаем в браузере
 
-// Цвета вариантов опроса: победа/поражение остаются зелёным и красным
+// Цвета вариантов опроса. Первые шесть — «фирменные», дальше подбираем
+// оттенок по золотому углу, чтобы 100 вариантов тоже различались.
 const POLL_COLORS = ['#5b9dff', '#ffb454', '#b98cff', '#4fd1c5', '#ff8fa3', '#9fd356'];
+function pollColor(index) {
+  const i = Math.max(0, Number(index) || 0);
+  if (i < POLL_COLORS.length) return POLL_COLORS[i];
+  const hue = Math.round(((i - POLL_COLORS.length) * 137.508 + 18) % 360);
+  return `hsl(${hue} 70% 63%)`;
+}
 const MODE_INFO = {
-  classic: 'Победа / поражение',
   poll: 'Опрос',
-  roll: 'Рулетка ников',
+  roll: 'Рулетка',
+  classic: 'Победа / поражение', // только у раундов, сделанных до обновления
 };
 const MODE_DESC = {
-  classic: 'два исхода, очко — угадавшим',
-  poll: 'свои варианты, очко — выбравшим победивший',
+  poll: 'свои варианты, очки — угадавшим',
   roll: 'случайный ник из написавших слово',
+  classic: 'прежний режим — остался только в истории',
 };
 
 const app = {
@@ -94,17 +102,26 @@ const awaitingRound = () => {
   const r = openRound();
   return r && roundPhase(r) === 'awaiting' ? r : null;
 };
-const words = () => app.state.settings.words || DEFAULT_WORDS;
 const settingsMode = () => normalizeMode(app.state?.settings?.mode);
+const pointsPerWin = () => clampPoints(app.state?.settings?.pointsPerWin);
+const pollAutoWinner = () => !!app.state?.settings?.pollAutoWinner;
 const pollOptions = () =>
   app.state?.settings?.pollOptions?.length ? app.state.settings.pollOptions : defaultPollOptions();
 const rollWords = () => (app.state?.settings?.rollWords?.length ? app.state.settings.rollWords : ['+']);
 
-/** цвет варианта: у классики — зелёный/красный, у опроса — из палитры */
+/** цвет варианта: у старой классики — зелёный/красный, у опроса — из палитры */
 function optionColor(round, key) {
-  if (!round || roundMode(round) !== 'poll') return key === 'lose' ? 'var(--lose)' : 'var(--win)';
-  const index = roundOptions(round).findIndex((o) => o.key === key);
-  return POLL_COLORS[(index < 0 ? 0 : index) % POLL_COLORS.length];
+  if (round && roundMode(round) === 'classic') return key === 'lose' ? 'var(--lose)' : 'var(--win)';
+  const index = round ? roundOptions(round).findIndex((o) => o.key === key) : -1;
+  return pollColor(index < 0 ? 0 : index);
+}
+
+/** первые варианты списком: «да · нет · … и ещё 94» — чтобы 100 не растягивали карточку */
+function optionsSummary(round, limit = 6) {
+  const options = roundOptions(round);
+  const labels = options.slice(0, limit).map((o) => o.label);
+  const rest = options.length - labels.length;
+  return labels.join(' · ') + (rest > 0 ? ` · и ещё ${rest}` : '');
 }
 
 /** подпись варианта по ключу (для истории, чата и таблицы) */
@@ -119,8 +136,7 @@ function demoRoundConfig() {
   if (round) return round;
   const mode = settingsMode();
   if (mode === 'roll') return { mode, entryWords: rollWords() };
-  if (mode === 'poll') return { mode, options: pollOptions() };
-  return { mode: 'classic', words: words() };
+  return { mode: 'poll', options: pollOptions() };
 }
 
 function persist() {
@@ -267,17 +283,11 @@ function randomVoteText() {
   const config = demoRoundConfig();
   const mode = roundMode(config);
   if (mode === 'roll') return randomOf(roundEntryWords(config));
-  if (mode === 'poll') {
-    const options = roundOptions(config);
-    if (!options.length) return randomOf(DEMO_CHATTER);
-    return randomOf(randomOf(options).words);
-  }
-  const w = config.words || words();
-  const win = w.win[0] || 'win';
-  const lose = w.lose[0] || 'lose';
+  const options = roundOptions(config);
+  if (!options.length) return randomOf(DEMO_CHATTER);
+  const word = randomOf(randomOf(options).words);
   // в демо специально мешаем разные записи, включая формат :слово:
-  const variants = [win, win, lose, win.toUpperCase(), lose, `${win}!`, `:${win}:`, `:${lose}:`];
-  return randomOf(variants);
+  return randomOf([word, word, word.toUpperCase(), `${word}!`, `:${word}:`]);
 }
 
 function demoTick() {
@@ -373,26 +383,27 @@ function stopPolling() {
 // ---------------------------------------------------------------------------
 // Действия с раундом
 // ---------------------------------------------------------------------------
-function startRound() {
+/** «Новый раунд»: только готовим раунд, приём начнётся по кнопке */
+function newRound() {
   const s = app.state;
   if (openRound()) return toast('Сначала заверши текущий раунд', true);
   const index = s.rounds.reduce((max, r) => Math.max(max, r.index || 0), 0) + 1;
   const settings = s.settings;
   const mode = settingsMode();
-  const openedAt = new Date().toISOString();
-  const timerSeconds = settings.timerEnabled ? clampTimerSeconds(settings.timerSeconds) : 0;
   s.rounds.push({
     id: uid(),
     index,
     mode,
-    openedAt,
-    timerSeconds,
-    timerStartedAt: timerSeconds ? openedAt : null,
+    createdAt: new Date().toISOString(),
+    openedAt: null, // появится, когда нажмут «Начать приём»
+    timerSeconds: settings.timerEnabled ? clampTimerSeconds(settings.timerSeconds) : 0,
+    timerStartedAt: null,
     votesClosedAt: null,
     outcome: null,
     decidedAt: null,
     allowRevote: !!settings.allowRevote,
-    words: { win: [...words().win], lose: [...words().lose] },
+    points: clampPoints(settings.pointsPerWin),
+    autoWinner: mode === 'poll' && !!settings.pollAutoWinner,
     options:
       mode === 'poll'
         ? pollOptions().map((o) => ({ key: o.key, label: o.label, words: [...o.words] }))
@@ -405,12 +416,49 @@ function startRound() {
   });
   persist();
   render();
-  if (timerSeconds) {
-    toast(`Раунд №${index}: ${formatDuration(timerSeconds * 1000)} на голоса — таймер пошёл`);
+  toast(
+    `Раунд №${index} готов (${MODE_INFO[mode].toLowerCase()}). Нажми «Начать приём ${
+      mode === 'roll' ? 'участия' : 'голосов'
+    }»`
+  );
+}
+
+/** настройки поменялись, пока раунд ждал старта — переносим их в раунд */
+function syncReadyRound() {
+  const round = openRound();
+  if (!round || roundPhase(round) !== 'ready') return;
+  const s = app.state.settings;
+  const mode = settingsMode();
+  round.mode = mode;
+  round.allowRevote = !!s.allowRevote;
+  round.points = clampPoints(s.pointsPerWin);
+  round.autoWinner = mode === 'poll' && !!s.pollAutoWinner;
+  round.options =
+    mode === 'poll' ? pollOptions().map((o) => ({ key: o.key, label: o.label, words: [...o.words] })) : [];
+  round.entryWords = mode === 'roll' ? [...rollWords()] : [];
+  round.awardWinner = s.rollAward !== false;
+  round.timerSeconds = s.timerEnabled ? clampTimerSeconds(s.timerSeconds) : 0;
+  round.timerStartedAt = null;
+}
+
+/** «Начать приём»: с этой секунды сообщения из чата считаются */
+function startVoting() {
+  const round = openRound();
+  if (!round) return newRound();
+  if (roundPhase(round) !== 'ready') return;
+  round.openedAt = new Date().toISOString();
+  round.timerStartedAt = roundTimerSeconds(round) ? round.openedAt : null;
+  persist();
+  render();
+  const mode = roundMode(round);
+  const seconds = roundTimerSeconds(round);
+  const unit = mode === 'roll' ? 'приём участия' : 'приём голосов';
+  if (seconds) {
+    toast(`Раунд №${round.index}: ${unit} начат, ${formatDuration(seconds * 1000)} — таймер пошёл`);
   } else if (mode === 'roll') {
-    toast(`Раунд №${index}: пиши «${rollWords().join(' / ')}» в чат, чтобы участвовать`);
+    toast(`Раунд №${round.index}: пиши «${roundEntryWords(round).join(' / ')}» в чат, чтобы участвовать`);
   } else {
-    toast(`Раунд №${index}: приём голосов начат — зрители могут писать в чат`);
+    toast(`Раунд №${round.index}: приём голосов начат — зрители могут писать в чат`);
   }
 }
 
@@ -432,6 +480,26 @@ function stopVoting(options = {}) {
   render();
   const prefix = options.byTimer ? '⏱ Время вышло: ' : '';
   const total = round.votes.length;
+
+  // «победитель — самый популярный вариант»: объявляем итог сразу
+  if (mode === 'poll' && round.autoWinner) {
+    const lead = pollLeader(round.votes, roundOptions(round));
+    if (lead.key) {
+      // итог объявится сам: плашка, анимация и очки — как при ручном выборе
+      finishRound(lead.key);
+      return;
+    }
+    if (lead.tied.length > 1) {
+      toast(
+        `${prefix}ничья: ${lead.tied
+          .map((key) => `«${optionLabel(round, key)}»`)
+          .join(' и ')} — выбери победивший вариант вручную`,
+        true
+      );
+      return;
+    }
+  }
+
   if (mode === 'roll') {
     toast(
       total
@@ -482,9 +550,12 @@ function finishRound(outcome) {
   celebrate(mode === 'poll' ? 'poll' : outcome, optionColor(round, outcome));
   flashWinners(guessed.map((v) => v.userId));
   const label = optionLabel(round, outcome);
+  const pts = roundPoints(round);
+  const award = pts
+    ? `по +${pts} ${plural(pts, 'очку', 'очка', 'очков')}`
+    : 'очки не начисляются';
   toast(
-    `Раунд №${round.index}: ${label}. ` +
-      `Угадали ${guessed.length} из ${round.votes.length} — очки начислены`
+    `Раунд №${round.index}: ${label}. ` + `Угадали ${guessed.length} из ${round.votes.length} — ${award}`
   );
 }
 
@@ -498,8 +569,13 @@ function cancelRound() {
   render();
 }
 
-// --- рулетка ников ---------------------------------------------------------
+// --- рулетка ---------------------------------------------------------------
 let spinning = false;
+
+// Варианты анимации прокрутки. Выбираются случайно: каждый розыгрыш
+// выглядит по-своему, но длится примерно одинаково.
+const SPIN_STYLES = ['slot', 'blur', 'flip', 'zoom', 'shake'];
+const SPIN_COLORS = ['#ffd166', '#ffb454', '#ffe29a', '#9fd356', '#b98cff'];
 
 /** случайный победитель среди участников; крутим ники, пока не «остановится» */
 async function rollWinner() {
@@ -511,26 +587,55 @@ async function rollWinner() {
   spinning = true;
   const card = $('round-card');
   const btn = card.querySelector('[data-act="roll"]');
+  const stage = card.querySelector('.roll-stage');
   const slot = card.querySelector('[data-roll-slot]');
+  const calm = prefersReducedMotion();
+  const style = calm ? 'calm' : randomOf(SPIN_STYLES);
   if (btn) {
     btn.disabled = true;
     btn.classList.add('spinning');
   }
-  if (slot) slot.classList.add('spinning');
+  if (stage) {
+    stage.classList.add('spinning', `spin-${style}`);
+    stage.style.setProperty('--spin-tone', randomOf(SPIN_COLORS));
+  }
+  if (slot) slot.classList.add('spinning', `spin-${style}`);
 
   let winner = null;
   try {
-    let delay = 55;
+    // у каждого стиля свой ритм перебора ников
+    const rhythm = {
+      slot: [55, 210, 1300],
+      blur: [45, 150, 1250],
+      flip: [140, 260, 1450],
+      zoom: [60, 190, 1150],
+      shake: [40, 120, 1200],
+      calm: [200, 300, 700],
+    }[style] || [55, 210, 1300];
+    let delay = rhythm[0];
     const started = Date.now();
-    while (Date.now() - started < 1300) {
+    while (Date.now() - started < rhythm[2]) {
       if (slot) slot.textContent = votes[Math.floor(Math.random() * votes.length)].nickname;
       await new Promise((resolve) => setTimeout(resolve, delay));
-      delay = Math.min(210, delay * 1.16);
+      delay = Math.min(rhythm[1], delay * 1.16);
     }
     winner = pickWinner(votes);
+    if (winner && slot) {
+      slot.textContent = winner.nickname;
+      slot.classList.add('settled');
+      if (stage) stage.classList.add('settled');
+      // даём анимации «остановки» доиграть, прежде чем показать итог
+      await new Promise((resolve) => setTimeout(resolve, calm ? 0 : 460));
+    }
   } finally {
-    spinning = false;
+    if (stage) stage.classList.remove('spinning', `spin-${style}`, 'settled');
+    if (slot) slot.classList.remove('spinning', `spin-${style}`, 'settled');
+    if (btn) {
+      btn.disabled = false;
+      btn.classList.remove('spinning');
+    }
   }
+  spinning = false;
   if (!winner) {
     render();
     return toast('Не получилось выбрать победителя — попробуй ещё раз', true);
@@ -542,9 +647,17 @@ async function rollWinner() {
   };
   persist();
   render();
-  celebrate('roll', '#ffd166');
+  celebrate('roll', randomOf(SPIN_COLORS));
   if (round.awardWinner !== false) flashWinners([winner.userId]);
-  toast(`🎲 Раунд №${round.index}: победил ${winner.nickname}`);
+  const pts = roundPoints(round);
+  toast(
+    `🎲 Раунд №${round.index}: победил ${winner.nickname}` +
+      (round.awardWinner === false
+        ? ' (без очков)'
+        : pts
+        ? ` (+${pts} ${plural(pts, 'очко', 'очка', 'очков')})`
+        : '')
+  );
 }
 
 /** перекрутить уже завершённый раунд (очки пересчитаются на нового победителя) */
@@ -594,10 +707,17 @@ function tickTimer() {
   if (left <= 0) stopVoting({ byTimer: true });
 }
 
-/** таймер включили/выключили посреди раунда — применяем к текущему раунду */
+/** таймер включили/выключили — применяем к текущему раунду (или к готовому) */
 function applyTimerToOpenRound(enabled) {
-  const round = votingRound();
+  const round = openRound();
   if (!round) return;
+  const phase = roundPhase(round);
+  if (phase === 'ready') {
+    round.timerSeconds = enabled ? clampTimerSeconds(app.state.settings.timerSeconds) : 0;
+    round.timerStartedAt = null;
+    return;
+  }
+  if (phase !== 'voting') return;
   if (enabled) {
     round.timerSeconds = clampTimerSeconds(app.state.settings.timerSeconds);
     round.timerStartedAt = new Date().toISOString();
@@ -639,7 +759,7 @@ function setPoints(userId, desired) {
   const player = scoreboard().find((p) => p.userId === userId);
   if (!player) return;
   const value = Math.max(-9999, Math.min(99999, Math.round(Number(desired) || 0)));
-  const delta = value - player.guessed;
+  const delta = value - (player.points - player.adjust);
   if (delta === 0) delete s.adjust[userId];
   else s.adjust[userId] = delta;
   if (!s.extraPlayers.some((p) => p.userId === userId)) {
@@ -657,7 +777,7 @@ function addPlayerManually() {
   const s = app.state;
   if (!s.extraPlayers.some((p) => p.userId === userId)) s.extraPlayers.push({ userId, nickname });
   const player = scoreboard().find((p) => p.userId === userId);
-  setPoints(userId, (player?.guessed || 0) + (Number.isFinite(points) ? points : 0));
+  setPoints(userId, (player?.points || 0) + (Number.isFinite(points) ? points : 0));
 }
 
 // ---------------------------------------------------------------------------
@@ -691,6 +811,7 @@ function render() {
   renderHistory();
   renderChat();
   renderStatus();
+  syncModeLock();
   syncTimerTicker();
 }
 
@@ -761,13 +882,20 @@ function timerBlock(round, phase) {
   if (phase !== 'voting') return '';
   const seconds = roundTimerSeconds(round);
   if (!seconds) return '';
-  return `<div class="round-timer" data-timer>
+  const total = seconds * 1000;
+  const leftMs = roundTimeLeft(round);
+  const left = leftMs == null ? total : Math.max(0, Math.min(total, leftMs));
+  const percent = total ? (left / total) * 100 : 0;
+  // Ширину ставим сразу настоящую: иначе при каждой перерисовке (например,
+  // из-за нового сообщения в чате) полоска стартовала бы со 100% и «догоняла»
+  // прежнее значение.
+  return `<div class="round-timer${left <= 10000 ? ' warn' : ''}" data-timer>
       <div class="rt-row">
         <span class="rt-clock">⏱</span>
-        <b data-timer-text>${formatDuration(seconds * 1000)}</b>
+        <b data-timer-text>${formatDuration(left)}</b>
         <span class="rt-note">до конца приёма голосов</span>
       </div>
-      <div class="rt-bar"><i data-timer-fill style="width:100%"></i></div>
+      <div class="rt-bar"><i data-timer-fill style="width:${percent.toFixed(3)}%"></i></div>
     </div>`;
 }
 
@@ -810,14 +938,14 @@ function activeRoundBody(round, phase) {
           'участников'
         )} · теперь жми «Крутить»`;
   } else {
-    const wordList =
+    const summary =
       mode === 'poll'
-        ? options.map((o) => o.words.join(' / ')).join(' · ')
+        ? optionsSummary(round)
         : options.map((o) => o.words.join(' / ')).join(' и ');
     sub = voting
       ? `с ${timeOf(round.openedAt)} · ${
           round.allowRevote ? 'можно переголосовать' : 'считается первое слово'
-        } · ${mode === 'poll' ? 'варианты' : 'слова'}: ${esc(wordList)}`
+        } · ${mode === 'poll' ? `вариантов ${options.length}` : 'слова'}: ${esc(summary)}`
       : `голоса приняты до ${timeOf(round.votesClosedAt)} · ${total} ${plural(
           total,
           'голос',
@@ -843,6 +971,9 @@ function activeRoundBody(round, phase) {
           ${!total ? '<div class="seg-empty"></div>' : ''}
         </div>`;
 
+  const pts = roundPoints(round);
+  const reward = pts ? `+${pts} ${plural(pts, 'очко', 'очка', 'очков')}` : 'без очков';
+  const rewardNote = pts ? `${reward} за верный` : 'очки не начисляются';
   const counters =
     mode === 'roll'
       ? `<div class="vote-counts"><span class="vc">🎲 ${total} ${plural(
@@ -850,15 +981,15 @@ function activeRoundBody(round, phase) {
           'участник',
           'участника',
           'участников'
-        )}</span></div>`
-      : `<div class="vote-counts">${options
+        )} · ${reward}</span></div>`
+      : `<div class="vote-counts${options.length > 8 ? ' many' : ''}">${options
           .map(
             (o) =>
               `<span class="vc" style="color:${optionColor(round, o.key)}">${esc(o.label)} — ${
                 counts[o.key] || 0
               }</span>`
           )
-          .join('')}</div>`;
+          .join('')}<span class="vc muted">${esc(rewardNote)}</span></div>`;
 
   let controls;
   if (voting) {
@@ -872,7 +1003,10 @@ function activeRoundBody(round, phase) {
       <button class="btn" data-act="cancel">Отменить раунд</button>`;
   } else if (mode === 'poll') {
     controls =
-      `<div class="controls-label">какой вариант победил? очко получат те, кто его выбрал</div>` +
+      `<div class="controls-label">какой вариант победил? ${
+        pts ? `очки получат те, кто его выбрал (+${pts})` : 'очки не начисляются'
+      }</div>` +
+      `<div class="outcome-list${options.length > 8 ? ' many' : ''}">` +
       options
         .map(
           (o) =>
@@ -882,6 +1016,7 @@ function activeRoundBody(round, phase) {
             )}">${esc(o.label)}</button>`
         )
         .join('') +
+      `</div>` +
       `<button class="btn" data-act="resume">↩ Возобновить приём</button>
        <button class="btn" data-act="cancel">Отменить раунд</button>`;
   } else {
@@ -922,6 +1057,12 @@ function finishedRoundBody(round) {
   if (mode === 'roll') {
     const winner = round.winner;
     const award = round.awardWinner !== false;
+    const pts = roundPoints(round);
+    const awardNote = !award
+      ? 'без очков'
+      : pts
+      ? `+${pts} ${plural(pts, 'очко', 'очка', 'очков')} в таблицу`
+      : 'очки не начисляются';
     return `<div class="round-top">
         <div>
           ${title}
@@ -932,15 +1073,15 @@ function finishedRoundBody(round) {
             'участников'
           )} · победитель выбран случайно</div>
         </div>
-        <button class="btn primary" data-act="start">▶ Новый раунд</button>
+        <button class="btn primary" data-act="new">▶ Новый раунд</button>
       </div>
       <div class="result-banner roll" style="--tone:var(--gold)">
         <span class="result-kicker">победитель рулетки</span>
         <span class="result-name">🎲 ${esc(winner?.nickname || '—')}</span>
-        <span class="result-note">${award ? '+1 очко в таблицу' : 'без очков'}</span>
+        <span class="result-note">${esc(awardNote)}</span>
       </div>
       <div class="controls">
-        <button class="btn" data-act="reroll" data-round="${esc(round.id || '')}">🎲 Ещё раз</button>
+        <button class="btn" data-act="reroll" data-round="${esc(round.id || '')}">🎲 Перевыбрать</button>
       </div>
       ${
         votes.length
@@ -959,15 +1100,17 @@ function finishedRoundBody(round) {
   const guessed = votes.filter((v) => v.vote === round.outcome);
   const label = optionLabel(round, round.outcome);
   const color = optionColor(round, round.outcome);
+  const pts = roundPoints(round);
+  const per = pts ? `по +${pts} ${plural(pts, 'очку', 'очка', 'очков')}` : 'без очков';
   const headline =
     mode === 'poll' ? label || '—' : round.outcome === 'win' ? 'Победа' : 'Поражение';
   const kicker = mode === 'poll' ? 'победивший вариант' : 'итог раунда';
   const note =
     mode === 'poll'
       ? guessed.length
-        ? `угадали ${guessed.length} из ${total} · по +1 очку`
+        ? `угадали ${guessed.length} из ${total} · ${per}`
         : 'в этом раунде никто не угадал'
-      : `слово «${label}» · угадали ${guessed.length} из ${total}`;
+      : `слово «${label}» · угадали ${guessed.length} из ${total} · ${per}`;
 
   return `<div class="round-top">
       <div>
@@ -979,7 +1122,7 @@ function finishedRoundBody(round) {
           'голосов'
         )} · раунд завершён, очки начислены</div>
       </div>
-      <button class="btn primary" data-act="start">▶ Новый раунд</button>
+      <button class="btn primary" data-act="new">▶ Новый раунд</button>
     </div>
     <div class="result-banner" style="--tone:${color}">
       <span class="result-kicker">${esc(kicker)}</span>
@@ -990,7 +1133,10 @@ function finishedRoundBody(round) {
       guessed.length
         ? `<div class="voters">${guessed
             .map(
-              (v) => `<span class="voter" style="border-color:${color};color:${color}">+1 ${esc(v.nickname)}</span>`
+              (v) =>
+                `<span class="voter" style="border-color:${color};color:${color}">${
+                  pts ? `+${pts} ` : ''
+                }${esc(v.nickname)}</span>`
             )
             .join('')}</div>`
         : ''
@@ -1002,19 +1148,61 @@ function idleRoundBody() {
   let hint;
   if (mode === 'roll') {
     hint = `Зрители пишут «${esc(rollWords().join(' / '))}» — сайт выберет случайный ник.`;
-  } else if (mode === 'poll') {
-    hint = `Варианты: ${esc(pollOptions().map((o) => o.label).join(' / '))}.`;
   } else {
-    hint = `Слова: ${esc(words().win.join(' / '))} и ${esc(words().lose.join(' / '))}.`;
+    const list = pollOptions();
+    hint = `Варианты (${list.length}): ${esc(optionsSummary({ mode: 'poll', options: list }))}.`;
   }
   return `<div class="round-top">
       <div>
         <div class="round-title">Всё готово к старту ${modeBadge(mode, true)}</div>
-        <div class="round-sub">${hint} Нажми кнопку — и слова из чата начнут считаться с этой секунды.</div>
+        <div class="round-sub">${hint} Нажми «Новый раунд» — приём начнётся отдельной кнопкой.</div>
       </div>
-      <button class="btn primary" data-act="start">▶ Начать ${
-        mode === 'roll' ? 'рулетку' : 'голосование'
+      <button class="btn primary" data-act="new">▶ Новый раунд</button>
+    </div>`;
+}
+
+/** раунд создан, но приём ещё не начат: показываем, что именно будем считать */
+function readyRoundBody(round) {
+  const mode = roundMode(round);
+  const options = roundOptions(round);
+  const pts = roundPoints(round);
+  const reward = pts ? `+${pts} ${plural(pts, 'очко', 'очка', 'очков')} победителям` : 'без очков';
+  const timer = roundTimerSeconds(round);
+  const timerNote = timer ? ` · таймер ${formatDuration(timer * 1000)}` : '';
+  const chips =
+    mode === 'roll'
+      ? `<div class="voters"><span class="voter">${esc(roundEntryWords(round).join(' / '))}</span></div>`
+      : `<div class="voters${options.length > 8 ? ' many' : ''}">${options
+          .map(
+            (o) =>
+              `<span class="voter" style="border-color:${optionColor(round, o.key)};color:${optionColor(
+                round,
+                o.key
+              )}">${esc(o.label)}</span>`
+          )
+          .join('')}</div>`;
+  return `<div class="round-top">
+      <div>
+        <div class="round-title">Раунд №${round.index} <span class="badge ready">готов к старту</span> ${modeBadge(
+    mode,
+    true
+  )}</div>
+        <div class="round-sub">${
+          mode === 'roll'
+            ? `Участие: напиши «${esc(roundEntryWords(round).join(' / '))}» в чат`
+            : `Вариантов ${options.length}: ${esc(optionsSummary(round))}`
+        }</div>
+      </div>
+      <button class="btn primary" data-act="start">▶ Начать приём ${
+        mode === 'roll' ? 'участия' : 'голосов'
       }</button>
+    </div>
+    <div class="ready-box">
+      <div class="muted small">${reward}${timerNote} · сообщения из чата начнут считаться после старта</div>
+      ${chips}
+    </div>
+    <div class="controls">
+      <button class="btn" data-act="cancel">Отменить раунд</button>
     </div>`;
 }
 
@@ -1025,8 +1213,12 @@ function renderRound() {
   const finished = lastFinished();
   card.classList.toggle('open', phase === 'voting');
   card.classList.toggle('awaiting', phase === 'awaiting');
+  card.classList.toggle('ready', phase === 'ready');
 
-  if (round && (phase === 'voting' || phase === 'awaiting')) {
+  if (round && phase === 'ready') {
+    card.dataset.mode = roundMode(round);
+    card.innerHTML = readyRoundBody(round);
+  } else if (round && (phase === 'voting' || phase === 'awaiting')) {
     card.dataset.mode = roundMode(round);
     card.innerHTML = activeRoundBody(round, phase);
   } else if (finished) {
@@ -1092,6 +1284,9 @@ function renderScoreboard() {
 /** полоса и числа для строки истории */
 function historyBar(round, votes, phase) {
   const total = votes.length || 1;
+  if (phase === 'ready') {
+    return { bar: '<div class="hist-bar"></div>', nums: '—', hint: 'раунд создан, приём ещё не начат' };
+  }
   if (roundMode(round) === 'roll') {
     return {
       bar: `<div class="hist-bar">${
@@ -1106,10 +1301,15 @@ function historyBar(round, votes, phase) {
     const guessed = votes.filter((v) => v.vote === round.outcome).length;
     return {
       bar: `<div class="hist-bar">${
-        guessed ? `<i style="width:${(guessed / total) * 100}%;background:var(--win)"></i>` : ''
+        guessed
+          ? `<i style="width:${(guessed / total) * 100}%;background:${optionColor(
+              round,
+              round.outcome
+            )}"></i>`
+          : ''
       }${
         votes.length - guessed
-          ? `<i style="width:${((votes.length - guessed) / total) * 100}%;background:var(--lose)"></i>`
+          ? `<i style="width:${((votes.length - guessed) / total) * 100}%;background:#3a4657"></i>`
           : ''
       }</div>`,
       nums: `${guessed}/${votes.length}`,
@@ -1117,6 +1317,7 @@ function historyBar(round, votes, phase) {
     };
   }
   const options = roundOptions(round);
+  const many = options.length > 6;
   return {
     bar: `<div class="hist-bar">${options
       .map((o) =>
@@ -1125,8 +1326,10 @@ function historyBar(round, votes, phase) {
           : ''
       )
       .join('')}</div>`,
-    nums: options.map((o) => counts[o.key] || 0).join('/'),
-    hint: options.map((o) => `${o.label} ${counts[o.key] || 0}`).join(' · '),
+    nums: many ? `${votes.length} голос.` : options.map((o) => counts[o.key] || 0).join('/'),
+    hint: many
+      ? `вариантов ${options.length}, голосов ${votes.length}`
+      : options.map((o) => `${o.label} ${counts[o.key] || 0}`).join(' · '),
   };
 }
 
@@ -1158,6 +1361,8 @@ function renderHistory() {
           mode === 'roll'
             ? '<span class="badge await">ждём розыгрыш</span>'
             : '<span class="badge await">ждём итог</span>';
+      } else if (phase === 'ready') {
+        badge = '<span class="badge ready">готов</span>';
       } else {
         badge = '<span class="badge live">идёт</span>';
       }
@@ -1175,7 +1380,7 @@ function renderHistory() {
 /** какие сообщения учтены в раунде: id -> ключ варианта */
 function countedMessages(round) {
   const out = new Map();
-  if (!round) return out;
+  if (!round || !round.openedAt) return out;
   const cutoff = votesEnd(round);
   const perUser = new Map();
   for (const m of app.state.messages) {
@@ -1208,6 +1413,7 @@ function renderChat() {
   const phase = roundPhase(round);
   const counted = countedMessages(round);
   const cutoff = round ? votesEnd(round) : null;
+  const started = !!(round && round.openedAt);
 
   el.innerHTML = messages
     .map((m) => {
@@ -1225,7 +1431,9 @@ function renderChat() {
         }</span>`;
       } else if (
         vote &&
+        started &&
         phase !== 'none' &&
+        phase !== 'ready' &&
         !isOwner &&
         m.ts >= round.openedAt &&
         !(cutoff && m.ts > cutoff)
@@ -1260,16 +1468,16 @@ function syncSettingsInputs() {
   const own = proxyOf(s);
   if ($('proxy-input')) $('proxy-input').value = own;
   if ($('landing-proxy-input')) $('landing-proxy-input').value = own;
-  $('words-win').value = wordsToText(words().win);
-  $('words-lose').value = wordsToText(words().lose);
   $('words-roll').value = wordsToText(rollWords());
   $('roll-award').checked = s.settings.rollAward !== false;
   $('revote-toggle').checked = !!s.settings.allowRevote;
   $('poll-input').value = s.settings.pollSeconds || 5;
+  if ($('points-per-win')) $('points-per-win').value = pointsPerWin();
+  if ($('poll-auto')) $('poll-auto').checked = pollAutoWinner();
   renderPollOptionsEditor();
   syncModeUI();
-  updateWordsHint();
   updateRollHint();
+  updatePointsHint();
   updateTimerControls();
 }
 
@@ -1280,57 +1488,18 @@ function markField(el, bad) {
   el.setAttribute('aria-invalid', bad ? 'true' : 'false');
 }
 
-function updateWordsHint() {
-  const w = words();
-  const win = w.win[0] || 'win';
-  const lose = w.lose[0] || 'lose';
-  $('words-hint').innerHTML =
-    `Голосом считается сообщение целиком: <b>${esc(win)}</b>, <b>${esc(win.toUpperCase())}!</b>, ` +
-    `<b>:KEKwAIT: ${esc(lose)}</b>. Фраза «я за ${esc(win)}» голосом не считается. ` +
-    `Слова можно перечислять через запятую, а слова из символов — <b>+</b>, <b>++</b>, <b>?!</b> — тоже работают.`;
-}
-
-/**
- * Сохранить слова классики. Ничего не переписывает под курсором и не стирает
- * введённое, если слово пока не дописано: просто подсвечивает поле.
- */
-function applyWordsFromInputs(options = {}) {
-  const winEl = $('words-win');
-  const loseEl = $('words-lose');
-  const win = parseWords(winEl.value);
-  const lose = parseWords(loseEl.value);
-  const overlap = win.filter((w) => lose.includes(w));
-  const problem = !win.length
-    ? 'Нужно хотя бы одно слово в поле «Голос за победу»'
-    : !lose.length
-    ? 'Нужно хотя бы одно слово в поле «Голос за поражение»'
-    : overlap.length
-    ? `Слово «${overlap[0]}» не может быть сразу за победу и за поражение`
-    : '';
-  markField(winEl, !win.length || overlap.length > 0);
-  markField(loseEl, !lose.length || overlap.length > 0);
-  if (problem) {
-    if (!options.silent) toast(problem, true);
-    return false;
-  }
-  const current = words();
-  const same =
-    win.length === current.win.length &&
-    lose.length === current.lose.length &&
-    win.every((w, i) => w === current.win[i]) &&
-    lose.every((w, i) => w === current.lose[i]);
-  // показываем в полях то, что реально будет использоваться, но не мешаем печатать
-  if (document.activeElement !== winEl) winEl.value = wordsToText(win);
-  if (document.activeElement !== loseEl) loseEl.value = wordsToText(lose);
-  if (same) return true;
-  app.state.settings.words = { win, lose };
-  const round = openRound();
-  if (round && roundMode(round) === 'classic') round.words = { win: [...win], lose: [...lose] };
-  persist();
-  updateWordsHint();
-  render();
-  if (!options.silent) toast('Слова сохранены');
-  return true;
+function updatePointsHint() {
+  const el = $('points-hint');
+  if (!el) return;
+  const pts = pointsPerWin();
+  el.innerHTML = pts
+    ? `Каждый, кто выбрал победивший вариант, получит <b>+${pts}</b> ${plural(
+        pts,
+        'очко',
+        'очка',
+        'очков'
+      )}. Победитель рулетки — столько же, если начисление включено.`
+    : 'Очки за раунды не начисляются — останутся только ручные правки в таблице.';
 }
 
 function updateRollHint() {
@@ -1357,11 +1526,7 @@ function applyRollWords(options = {}) {
   const same = list.length === current.length && list.every((w, i) => w === current[i]);
   app.state.settings.rollWords = list;
   const round = openRound();
-  if (
-    round &&
-    roundMode(round) === 'roll' &&
-    !tallyVotes(app.state.messages, round).length
-  ) {
+  if (round && roundMode(round) === 'roll' && !tallyVotes(app.state.messages, round).length) {
     round.entryWords = [...list];
   }
   persist();
@@ -1377,8 +1542,20 @@ function modeDescription(mode) {
   return `${MODE_INFO[mode]} — ${MODE_DESC[mode]}`;
 }
 
+/** блокировка переключения режима, пока идёт приём (режим уже зафиксирован в раунде) */
+function syncModeLock() {
+  const locked = !!votingRound();
+  document.querySelectorAll('.mode-tab').forEach((tab) => {
+    tab.disabled = locked;
+    tab.title = locked ? 'Пока идёт приём голосов, режим менять нельзя' : '';
+  });
+  if ($('mode-lock')) $('mode-lock').hidden = !locked;
+  document.querySelectorAll('.mode-card').forEach((card) => card.classList.toggle('locked', locked));
+}
+
 function syncModeUI() {
   const mode = settingsMode();
+  syncModeLock();
   document.querySelectorAll('.mode-tab').forEach((tab) => {
     const active = tab.dataset.mode === mode;
     tab.classList.toggle('active', active);
@@ -1395,8 +1572,12 @@ function syncModeUI() {
 function setSettingsMode(next) {
   const mode = normalizeMode(next);
   if (settingsMode() === mode) return;
-  if (openRound()) toast('Новый режим начнётся со следующего раунда');
+  if (votingRound()) {
+    return toast('Пока идёт приём голосов, режим менять нельзя — сначала останови приём', true);
+  }
+  if (openRound()) toast('Режим применится к этому раунду — он ещё не начался');
   app.state.settings.mode = mode;
+  syncReadyRound();
   persist();
   syncModeUI();
   render();
@@ -1416,7 +1597,9 @@ function readPollRows() {
 function refreshPollButtons() {
   const rows = pollRows();
   const add = $('poll-add');
-  if (add) add.disabled = rows.length >= 6;
+  if (add) add.disabled = rows.length >= MAX_POLL_OPTIONS;
+  const counter = $('poll-count');
+  if (counter) counter.textContent = `${rows.length} из ${MAX_POLL_OPTIONS}`;
   $('poll-options').querySelectorAll('[data-poll-remove]').forEach((btn) => {
     btn.disabled = rows.length <= 2;
   });
@@ -1428,7 +1611,7 @@ function pollRowElement(value, index) {
   const input = document.createElement('input');
   input.type = 'text';
   input.value = value;
-  input.placeholder = index === 0 ? 'да' : index === 1 ? 'нет' : 'вариант';
+  input.placeholder = index === 0 ? 'да' : index === 1 ? 'нет' : `вариант ${index + 1}`;
   input.spellcheck = false;
   input.dataset.pollInput = String(index);
   const del = document.createElement('button');
@@ -1454,10 +1637,16 @@ function updatePollHint() {
   const el = $('poll-hint');
   if (!el) return;
   const opts = pollOptions();
+  const shown = opts.slice(0, 8);
+  const rest = opts.length - shown.length;
   el.innerHTML =
     `Голос — сообщение целиком, равное названию или синониму: ` +
-    opts.map((o) => `<b>${esc(o.words.join(' / '))}</b>`).join(', ') +
-    `. Победивший вариант даёт очко всем, кто его выбрал.`;
+    shown.map((o) => `<b>${esc(o.words.join(' / '))}</b>`).join(', ') +
+    (rest > 0 ? ` и ещё ${rest} ${plural(rest, 'вариант', 'варианта', 'вариантов')}` : '') +
+    `. Победивший вариант даёт очки всем, кто его выбрал. ` +
+    (pollAutoWinner()
+      ? 'Итог объявится сам: побеждает вариант с наибольшим числом голосов.'
+      : 'Итог объявляешь ты — кнопкой с нужным вариантом.');
 }
 
 function applyPollFromInputs(options = {}) {
@@ -1498,6 +1687,7 @@ function applyPollFromInputs(options = {}) {
   }
   persist();
   updatePollHint();
+  syncReadyRound();
   if (!same) render();
   return true;
 }
@@ -1529,8 +1719,11 @@ function setTimerSeconds(value, options = {}) {
   const seconds = clampTimerSeconds(value, 60);
   app.state.settings.timerSeconds = seconds;
   if ($('timer-seconds')) $('timer-seconds').value = seconds;
-  const round = votingRound();
-  if (round && roundTimerSeconds(round) && app.state.settings.timerEnabled) {
+  const round = openRound();
+  if (round && roundPhase(round) === 'ready' && app.state.settings.timerEnabled) {
+    round.timerSeconds = seconds;
+    round.timerStartedAt = null;
+  } else if (round && roundPhase(round) === 'voting' && roundTimerSeconds(round) && app.state.settings.timerEnabled) {
     // поменяли длительность на ходу — отсчитываем заново
     round.timerSeconds = seconds;
     round.timerStartedAt = new Date().toISOString();
@@ -1572,7 +1765,7 @@ function exportData(kind) {
   const scores = scoreboard();
   const sortedRounds = [...s.rounds].sort((a, b) => a.index - b.index);
   const leaders = exportLeadersRows(scores);
-  const rounds = exportRoundsRows(sortedRounds, words());
+  const rounds = exportRoundsRows(sortedRounds);
   const channel = s.channelName || s.channel || 'канал';
   const stamp = new Date().toISOString().slice(0, 10);
   const base = `w-vote-${channel}-${stamp}`;
@@ -1591,12 +1784,14 @@ function exportData(kind) {
     ['Всего угаданных исходов', guessedAll],
     ['Побед в рулетке', rollAll],
   ];
-  if (settingsMode() === 'classic') {
-    txtHeader.push(['Слова-голоса', `${words().win.join('/')} и ${words().lose.join('/')}`]);
-  } else if (settingsMode() === 'poll') {
+  if (settingsMode() === 'poll') {
     txtHeader.push(['Варианты', pollOptions().map((o) => o.words.join('/')).join(' · ')]);
   } else {
     txtHeader.push(['Слово участия', rollWords().join('/')]);
+  }
+  txtHeader.push(['Очков за раунд', pointsPerWin()]);
+  if (settingsMode() === 'poll') {
+    txtHeader.push(['Победитель по голосам', pollAutoWinner() ? 'да' : 'объявляется вручную']);
   }
 
   if (kind === 'xlsx') {
@@ -1927,7 +2122,8 @@ $('round-card').addEventListener('click', (e) => {
   const btn = e.target.closest('[data-act]');
   if (!btn || btn.disabled) return;
   const act = btn.dataset.act;
-  if (act === 'start') startRound();
+  if (act === 'new') newRound();
+  if (act === 'start') startVoting();
   if (act === 'stop') stopVoting();
   if (act === 'resume') resumeVoting();
   if (act === 'finish') finishRound(btn.dataset.outcome);
@@ -1967,20 +2163,6 @@ $('clear-history').addEventListener('click', () => {
   render();
 });
 
-// слова классики: пока печатают — тихо сохраняем, на потерю фокуса — с подсказкой
-let wordsTimer = null;
-const scheduleWords = () => {
-  clearTimeout(wordsTimer);
-  wordsTimer = setTimeout(() => applyWordsFromInputs({ silent: true }), 500);
-};
-['words-win', 'words-lose'].forEach((id) => {
-  $(id).addEventListener('input', scheduleWords);
-  $(id).addEventListener('change', () => {
-    clearTimeout(wordsTimer);
-    applyWordsFromInputs();
-  });
-});
-
 // слово участия в рулетке (можно и символы: «+», «++»)
 let rollTimer = null;
 $('words-roll').addEventListener('input', () => {
@@ -1998,9 +2180,12 @@ $('roll-award').addEventListener('change', (e) => {
   if (round && roundMode(round) === 'roll' && !round.winner) round.awardWinner = e.target.checked;
   persist();
   render();
+  const pts = pointsPerWin();
   toast(
     e.target.checked
-      ? 'Победитель рулетки будет получать +1 очко'
+      ? pts
+        ? `Победитель рулетки будет получать +${pts} ${plural(pts, 'очко', 'очка', 'очков')}`
+        : 'Начисление включено, но очков за раунд сейчас 0'
       : 'Рулетка без очков: победитель просто объявляется'
   );
 });
@@ -2010,11 +2195,62 @@ document.querySelectorAll('.mode-tab').forEach((tab) => {
   tab.addEventListener('click', () => setSettingsMode(tab.dataset.mode));
 });
 
+// сколько очков получает победитель раунда
+let pointsTimer = null;
+function applyPoints(options = {}) {
+  const input = $('points-per-win');
+  if (!input) return true;
+  if (!String(input.value).trim()) {
+    // пустое поле не превращаем в «0 очков»: просто возвращаем прежнее значение
+    if (!options.silent) {
+      input.value = pointsPerWin();
+      toast('Очки за раунд не могут быть пустыми', true);
+    }
+    return false;
+  }
+  const value = clampPoints(input.value);
+  app.state.settings.pointsPerWin = value;
+  const round = openRound();
+  if (round && roundPhase(round) === 'ready') round.points = value;
+  persist();
+  updatePointsHint();
+  if (document.activeElement !== input) input.value = value;
+  if (!options.silent) {
+    render();
+    toast(value ? `Победитель раунда получает +${value}` : 'Очки за раунды отключены');
+  }
+  return true;
+}
+$('points-per-win').addEventListener('input', () => {
+  clearTimeout(pointsTimer);
+  pointsTimer = setTimeout(() => applyPoints({ silent: true }), 500);
+});
+$('points-per-win').addEventListener('change', () => {
+  clearTimeout(pointsTimer);
+  applyPoints();
+});
+
+// «победитель — самый популярный вариант»
+$('poll-auto').addEventListener('change', (e) => {
+  app.state.settings.pollAutoWinner = e.target.checked;
+  syncReadyRound();
+  persist();
+  updatePollHint();
+  render();
+  toast(
+    e.target.checked
+      ? 'Итог опроса будет объявляться автоматически по большинству голосов'
+      : 'Итог опроса снова объявляешь ты вручную'
+  );
+});
+
 // варианты опроса: добавляем и убираем строки прямо в интерфейсе
 $('poll-add').addEventListener('click', () => {
   const box = $('poll-options');
   const rows = pollRows();
-  if (rows.length >= 6) return toast('Больше шести вариантов не нужно', true);
+  if (rows.length >= MAX_POLL_OPTIONS) {
+    return toast(`Больше ${MAX_POLL_OPTIONS} вариантов не поместится`, true);
+  }
   const row = pollRowElement('', rows.length);
   box.appendChild(row);
   refreshPollButtons();

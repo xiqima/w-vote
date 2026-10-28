@@ -1,6 +1,6 @@
 // ===========================================================================
-//  tests/modes-timer.test.js — режимы (победа/поражение, опрос, рулетка),
-//  слова из символов и таймер раунда.  Запуск: node tests/modes-timer.test.js
+//  tests/modes-timer.test.js — режимы (опрос, рулетка), фазы раунда, очки,
+//  слова из символов и таймер.  Запуск: node tests/modes-timer.test.js
 // ===========================================================================
 'use strict';
 const fs = require('fs');
@@ -118,16 +118,123 @@ check('у рулетки вариантов нет, есть слово учас
   eq(WV.voteKeyFor('+', { mode: 'roll', entryWords: ['+'] }), 'enter');
   eq(WV.voteKeyFor('++', { mode: 'roll', entryWords: ['+'] }), null);
 });
-check('normalizePollOptions: минимум два, максимум шесть, без повторов', () => {
+check('normalizePollOptions: минимум два, максимум 100, без повторов', () => {
   const one = WV.normalizePollOptions([{ words: ['да'] }]);
   eq(one.length, 2); // одного мало — берём значения по умолчанию
-  const many = WV.normalizePollOptions(
+  const nine = WV.normalizePollOptions(
     Array.from({ length: 9 }, (_, i) => ({ words: ['в' + i] }))
   );
-  eq(many.length, 6);
-  eq(many.map((o) => o.key), ['p1', 'p2', 'p3', 'p4', 'p5', 'p6']);
+  eq(nine.length, 9);
+  eq(nine.map((o) => o.key).slice(0, 3), ['p1', 'p2', 'p3']);
+  const hundred = WV.normalizePollOptions(
+    Array.from({ length: 130 }, (_, i) => ({ words: ['в' + i] }))
+  );
+  eq(hundred.length, 100);
+  eq(hundred[99].key, 'p100');
   const dup = WV.normalizePollOptions([{ words: ['да', 'да', 'ДА'] }, { words: ['нет'] }]);
   eq(dup[0].words, ['да']);
+});
+
+console.log('\nфазы раунда');
+check('новый раунд ждёт старта: ready, а не voting', () => {
+  const round = { mode: 'poll', openedAt: null, votesClosedAt: null, outcome: null };
+  eq(WV.roundPhase(round), 'ready');
+  eq(WV.roundPhase({ ...round, openedAt: T(0) }), 'voting');
+  eq(WV.roundPhase({ ...round, openedAt: T(0), votesClosedAt: T(5) }), 'awaiting');
+  eq(WV.roundPhase({ ...round, openedAt: T(0), votesClosedAt: T(5), outcome: 'p1' }), 'finished');
+  eq(WV.roundPhase(null), 'none');
+});
+check('у готового раунда голоса не считаются', () => {
+  const round = { mode: 'poll', openedAt: null, options: [{ key: 'p1', words: ['да'] }, { key: 'p2', words: ['нет'] }] };
+  const chat = [{ userId: 'u1', nickname: 'noxir', tags: [], content: 'да', ts: T(1) }];
+  eq(WV.tallyVotes(chat, round), []);
+});
+check('normalizeMode: в настройках только опрос и рулетка', () => {
+  eq(WV.normalizeMode('poll'), 'poll');
+  eq(WV.normalizeMode('roll'), 'roll');
+  eq(WV.normalizeMode('classic'), 'poll'); // старая настройка становится опросом
+  eq(WV.normalizeMode('мусор'), 'poll');
+  eq(WV.roundMode({ mode: 'classic' }), 'classic'); // а старый раунд остаётся собой
+  eq(WV.roundMode({}), 'classic');
+  eq(WV.roundMode({ mode: 'poll' }), 'poll');
+});
+
+console.log('\nочки за раунд');
+check('clampPoints/roundPoints держат коридор 0…100', () => {
+  eq(WV.clampPoints(3), 3);
+  eq(WV.clampPoints('5'), 5);
+  eq(WV.clampPoints(-2), 0);
+  eq(WV.clampPoints(999), 100);
+  eq(WV.clampPoints('abc'), 1);
+  eq(WV.clampPoints(''), 1); // пустое поле — не «0 очков»
+  eq(WV.clampPoints(null), 1);
+  eq(WV.roundPoints({}), 1); // у старых раундов было 1 очко
+  eq(WV.roundPoints({ points: 0 }), 0);
+  eq(WV.roundPoints({ points: 7 }), 7);
+});
+check('computeScores начисляет очки раунда, а не фиксированное 1', () => {
+  const rounds = [
+    {
+      index: 1,
+      mode: 'poll',
+      openedAt: T(0),
+      votesClosedAt: T(10),
+      outcome: 'p1',
+      points: 3,
+      options: [{ key: 'p1', words: ['да'] }, { key: 'p2', words: ['нет'] }],
+      votes: [
+        { userId: 'u1', nickname: 'noxir', vote: 'p1' },
+        { userId: 'u2', nickname: 'dyson', vote: 'p2' },
+      ],
+    },
+    {
+      index: 2,
+      mode: 'roll',
+      openedAt: T(20),
+      votesClosedAt: T(25),
+      points: 5,
+      awardWinner: true,
+      winner: { userId: 'u2', nickname: 'dyson' },
+      votes: [
+        { userId: 'u1', nickname: 'noxir', vote: 'enter' },
+        { userId: 'u2', nickname: 'dyson', vote: 'enter' },
+      ],
+    },
+    {
+      index: 3,
+      mode: 'poll',
+      openedAt: T(30),
+      votesClosedAt: T(35),
+      outcome: 'p1',
+      points: 0,
+      options: [{ key: 'p1', words: ['да'] }, { key: 'p2', words: ['нет'] }],
+      votes: [{ userId: 'u1', nickname: 'noxir', vote: 'p1' }],
+    },
+  ];
+  const scores = WV.computeScores(rounds);
+  const by = Object.fromEntries(scores.map((p) => [p.nickname, p]));
+  eq(by.noxir.points, 3); // 3 + 0
+  eq(by.noxir.guessed, 2); // угаданных раундов два, но третий был за 0
+  eq(by.dyson.points, 5);
+  eq(by.dyson.rollWins, 1);
+  eq(scores.map((p) => p.nickname), ['dyson', 'noxir']);
+});
+check('ручная правка очков считается поверх заработанных', () => {
+  const rounds = [
+    {
+      index: 1,
+      mode: 'poll',
+      openedAt: T(0),
+      votesClosedAt: T(10),
+      outcome: 'p1',
+      points: 4,
+      options: [{ key: 'p1', words: ['да'] }, { key: 'p2', words: ['нет'] }],
+      votes: [{ userId: 'u1', nickname: 'noxir', vote: 'p1' }],
+    },
+  ];
+  const [player] = WV.computeScores(rounds, { u1: -2 });
+  eq(player.points, 2);
+  eq(player.adjust, -2);
 });
 
 console.log('\nголоса по режимам');
@@ -282,21 +389,29 @@ check('clampTimerSeconds держит коридор 5…3600', () => {
 });
 
 console.log('\nнастройки');
-check('emptyState: режим classic и таймер выключен', () => {
+check('emptyState: по умолчанию опрос, очко за раунд, таймер выключен', () => {
   const st = WV.emptyState();
-  eq(st.settings.mode, 'classic');
+  eq(st.settings.mode, 'poll');
   eq(st.settings.timerEnabled, false);
   eq(st.settings.rollWords, ['+']);
   eq(st.settings.pollOptions.length, 2);
+  eq(st.settings.pointsPerWin, 1);
+  eq(st.settings.pollAutoWinner, false);
 });
-check('normalizeSettings: старые сохранения получают режим и таймер', () => {
-  const s = WV.normalizeSettings({ words: { win: ['победа'], lose: ['луз'] }, allowRevote: true });
-  eq(s.mode, 'classic');
-  eq(s.words, { win: ['победа'], lose: ['луз'] });
+check('normalizeSettings: очки классики переносятся в варианты опроса', () => {
+  const s = WV.normalizeSettings({ mode: 'classic', words: { win: ['победа'], lose: ['луз'] } });
+  eq(s.mode, 'poll');
+  eq(s.words, undefined);
+  eq(s.pollOptions.map((o) => o.words), [['победа'], ['луз']]);
+});
+check('normalizeSettings: таймер, режим и очки по умолчанию', () => {
+  const s = WV.normalizeSettings({ allowRevote: true });
+  eq(s.mode, 'poll');
   eq(s.timerEnabled, false);
   eq(s.timerSeconds, 60);
   eq(s.allowRevote, true);
   eq(s.rollAward, true);
+  eq(s.pointsPerWin, 1);
 });
 check('normalizeSettings: битые значения не ломают интерфейс', () => {
   const s = WV.normalizeSettings({
@@ -306,23 +421,47 @@ check('normalizeSettings: битые значения не ломают инте
     rollWords: ['  '],
     timerSeconds: -3,
     pollSeconds: 999,
+    pointsPerWin: 'много',
   });
-  eq(s.mode, 'classic');
-  eq(s.words, { win: ['win'], lose: ['lose'] });
+  eq(s.mode, 'poll');
   eq(s.pollOptions.length, 2);
   eq(s.rollWords, ['+']);
   eq(s.timerSeconds, 60);
   eq(s.pollSeconds, 30);
+  eq(s.pointsPerWin, 1);
 });
 check('нормализация символьных слов в настройках', () => {
-  const s = WV.normalizeSettings({ words: { win: ['+'], lose: ['-'] }, rollWords: ['+', '++'] });
-  eq(s.words, { win: ['+'], lose: ['-'] });
+  const s = WV.normalizeSettings({ mode: 'classic', words: { win: ['+'], lose: ['-'] }, rollWords: ['+', '++'] });
+  eq(s.pollOptions.map((o) => o.words), [['+'], ['-']]);
   eq(s.rollWords, ['+', '++']);
+});
+
+console.log('\nпобедитель по большинству');
+check('pollLeader: явный лидер', () => {
+  const options = [{ key: 'p1', words: ['да'] }, { key: 'p2', words: ['нет'] }, { key: 'p3', words: ['может'] }];
+  const votes = [
+    { userId: 'u1', vote: 'p2' },
+    { userId: 'u2', vote: 'p2' },
+    { userId: 'u3', vote: 'p1' },
+  ];
+  const lead = WV.pollLeader(votes, options);
+  eq(lead.key, 'p2');
+  eq(lead.count, 2);
+  eq(lead.tied, ['p2']);
+});
+check('pollLeader: ничья и пустой опрос', () => {
+  const options = [{ key: 'p1', words: ['да'] }, { key: 'p2', words: ['нет'] }];
+  const tie = WV.pollLeader([{ userId: 'u1', vote: 'p1' }, { userId: 'u2', vote: 'p2' }], options);
+  eq(tie.key, null);
+  eq(tie.tied, ['p1', 'p2']);
+  const empty = WV.pollLeader([], options);
+  eq(empty.key, null);
+  eq(empty.tied, []);
 });
 
 console.log('\nподписи для экспорта');
 check('modeLabel/outcomeLabel', () => {
-  eq(WV.modeLabel('classic'), 'победа/поражение');
+  eq(WV.modeLabel('classic'), 'победа/поражение'); // только старые раунды
   eq(WV.modeLabel('poll'), 'опрос');
   eq(WV.modeLabel('roll'), 'рулетка');
   eq(WV.outcomeLabel({ outcome: 'win' }), 'победа');

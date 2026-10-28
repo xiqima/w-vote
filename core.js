@@ -136,19 +136,23 @@ function detectVote(text, words = DEFAULT_WORDS) {
 }
 // ---------------------------------------------------------------------------
 // 3. Режимы раунда
-//    classic — победа / поражение: очко тем, кто угадал исход
-//    poll    — опрос: 2–6 вариантов, очко тем, кто выбрал победивший
-//    roll    — рулетка: случайный ник из тех, кто написал слово-участие
+//    poll — опрос: 2–100 вариантов, очки тем, кто выбрал победивший
+//    roll — рулетка: случайный ник из тех, кто написал слово-участие
+//    classic — прежний режим «победа / поражение». Из настроек он убран,
+//              но старые раунды продолжают читаться, считаться и выгружаться.
 // ---------------------------------------------------------------------------
-const MODES = ['classic', 'poll', 'roll'];
+const MODES = ['poll', 'roll'];
 
+/** режим из настроек: всё, что не рулетка, — опрос */
 function normalizeMode(mode) {
-  return MODES.includes(mode) ? mode : 'classic';
+  return mode === 'roll' ? 'roll' : 'poll';
 }
 
 /** режим раунда (у старых раундов поля mode нет — это классика) */
 function roundMode(round) {
-  return normalizeMode(round && round.mode);
+  if (!round) return 'classic';
+  if (round.mode === 'poll' || round.mode === 'roll') return round.mode;
+  return 'classic';
 }
 
 function defaultPollOptions() {
@@ -157,6 +161,9 @@ function defaultPollOptions() {
     { key: 'p2', label: 'нет', words: ['нет'] },
   ];
 }
+
+/** сколько вариантов опроса разрешаем */
+const MAX_POLL_OPTIONS = 100;
 
 /**
  * Настройки опроса -> аккуратный список вариантов.
@@ -171,7 +178,7 @@ function normalizePollOptions(list) {
     words = [...new Set(words)];
     if (!words.length) continue;
     out.push({ key: 'p' + (out.length + 1), label: words[0], words });
-    if (out.length >= 6) break;
+    if (out.length >= MAX_POLL_OPTIONS) break;
   }
   return out.length >= 2 ? out : defaultPollOptions();
 }
@@ -226,6 +233,7 @@ function voteKeyFor(text, round) {
 
 // ---------------------------------------------------------------------------
 // 4. Фазы раунда
+//    ready    — раунд создан («Новый раунд»), приём ещё не начался
 //    voting   — приём голосов идёт
 //    awaiting — приём остановлен, ждём исход (можно ещё передумать)
 //    finished — исход объявлен, очки начислены
@@ -240,6 +248,7 @@ function roundPhase(round) {
   if (round.outcome) return 'finished';
   if (roundMode(round) === 'roll' && round.winner && round.winner.userId) return 'finished';
   if (votesEnd(round)) return 'awaiting';
+  if (!round.openedAt) return 'ready';
   return 'voting';
 }
 
@@ -291,6 +300,7 @@ function formatDuration(ms) {
  */
 function tallyVotes(messages, round) {
   const byUser = new Map();
+  if (!round || !round.openedAt) return [];
   const end = votesEnd(round);
   for (const m of messages) {
     if (!m.ts || m.ts < round.openedAt) continue;
@@ -330,11 +340,41 @@ function countByOption(votes) {
   return out;
 }
 
+/**
+ * Лидер опроса: вариант, за который больше всего голосов.
+ * Если первое место делят несколько — key: null, а ключи лежат в tied.
+ * @returns {{key: string|null, count: number, tied: string[]}}
+ */
+function pollLeader(votes, options) {
+  const counts = countByOption(votes);
+  const list = (options || []).map((o) => ({ key: o.key, count: counts[o.key] || 0 }));
+  list.sort((a, b) => b.count - a.count);
+  const best = list.length ? list[0].count : 0;
+  const tied = best > 0 ? list.filter((o) => o.count === best).map((o) => o.key) : [];
+  return { key: tied.length === 1 ? tied[0] : null, count: best, tied };
+}
+
 // ---------------------------------------------------------------------------
 // 6. Очки
 // ---------------------------------------------------------------------------
+/** сколько очков даём за раунд: 0…100, пустое и мусор → 1 */
+function clampPoints(value, fallback = 1) {
+  const raw = typeof value === 'string' ? value.trim() : value;
+  if (raw === '' || raw == null) return fallback;
+  const n = Math.round(Number(raw));
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(0, Math.min(100, n));
+}
+
+/** очки конкретного раунда (у старых раундов поля points нет — было 1) */
+function roundPoints(round) {
+  return clampPoints(round && round.points, 1);
+}
+
 /**
  * Итоговые очки = угаданные раунды + победы в рулетке + ручная правка (adjust).
+ * За каждый угаданный раунд начисляется столько очков, сколько было в его
+ * настройке points (по умолчанию 1), поэтому старые раунды считаются как раньше.
  * @param rounds   [{index, mode, outcome, winner, votes:[{userId,nickname,vote}]}]
  * @param adjust   {userId: число}
  * @param extra    [{userId, nickname}] — кого показать, даже если 0 очков
@@ -343,22 +383,35 @@ function computeScores(rounds, adjust = {}, extra = []) {
   const map = new Map();
   const touch = (userId, nickname) => {
     if (!map.has(userId)) {
-      map.set(userId, { userId, nickname, guessed: 0, rollWins: 0, voted: 0, adjust: 0, streak: 0, bestStreak: 0 });
+      map.set(userId, {
+        userId,
+        nickname,
+        guessed: 0,
+        rollWins: 0,
+        earned: 0, // очки за раунды (без ручной правки)
+        voted: 0,
+        adjust: 0,
+        streak: 0,
+        bestStreak: 0,
+      });
     }
     const p = map.get(userId);
     if (nickname) p.nickname = nickname;
     return p;
   };
 
-  // завершённый раунд: объявлен исход (классика, опрос) или выбран победитель рулетки
+  // завершённый раунд: объявлен исход (опрос, классика) или выбран победитель рулетки
   const finished = rounds.filter((r) => roundPhase(r) === 'finished').sort((a, b) => a.index - b.index);
 
   for (const r of finished) {
+    const points = roundPoints(r);
     if (roundMode(r) === 'roll') {
       for (const v of r.votes || []) touch(v.userId, v.nickname).voted += 1;
       const winner = r.winner;
       if (winner && winner.userId && r.awardWinner !== false) {
-        touch(winner.userId, winner.nickname).rollWins += 1;
+        const p = touch(winner.userId, winner.nickname);
+        p.rollWins += 1;
+        p.earned += points;
       }
       continue;
     }
@@ -367,6 +420,7 @@ function computeScores(rounds, adjust = {}, extra = []) {
       p.voted += 1;
       if (v.vote === r.outcome) {
         p.guessed += 1;
+        p.earned += points;
         p.streak += 1;
         p.bestStreak = Math.max(p.bestStreak, p.streak);
       } else {
@@ -381,9 +435,13 @@ function computeScores(rounds, adjust = {}, extra = []) {
   }
   for (const e of extra || []) touch(e.userId, e.nickname);
 
-  const list = [...map.values()].map((p) => ({ ...p, points: p.guessed + p.rollWins + p.adjust }));
+  const list = [...map.values()].map((p) => ({ ...p, points: p.earned + p.adjust }));
   return list.sort(
-    (a, b) => b.points - a.points || b.guessed - a.guessed || (a.nickname > b.nickname ? 1 : -1)
+    (a, b) =>
+      b.points - a.points ||
+      b.guessed - a.guessed ||
+      b.rollWins - a.rollWins ||
+      (a.nickname > b.nickname ? 1 : -1)
   );
 }
 // ---------------------------------------------------------------------------
@@ -418,10 +476,14 @@ function migrateRound(r) {
   if (round.decidedAt === undefined) round.decidedAt = round.outcome ? round.closedAt || null : null;
   delete round.closedAt;
 
-  round.mode = normalizeMode(round.mode);
+  // старые раунды без mode — классика; её не переводим в опрос, чтобы
+  // история, очки и выгрузки выглядели точно как раньше
+  if (round.mode !== 'poll' && round.mode !== 'roll') round.mode = 'classic';
   round.votes = Array.isArray(round.votes) ? round.votes : [];
   round.allowRevote = !!round.allowRevote;
   round.timerSeconds = roundTimerSeconds(round);
+  round.points = roundPoints(round);
+  round.autoWinner = round.mode === 'poll' && !!round.autoWinner;
   round.words = {
     win: Array.isArray(round.words?.win) && round.words.win.length ? round.words.win.slice() : ['win'],
     lose: Array.isArray(round.words?.lose) && round.words.lose.length ? round.words.lose.slice() : ['lose'],
@@ -443,11 +505,12 @@ function migrateRound(r) {
 
 function defaultSettings() {
   return {
-    mode: 'classic', // classic — победа/поражение, poll — опрос, roll — рулетка ников
-    words: { win: ['win'], lose: ['lose'] }, // слова-голоса классики
+    mode: 'poll', // poll — опрос, roll — рулетка
     pollOptions: defaultPollOptions(), // варианты следующего опроса
+    pollAutoWinner: false, // победителем становится самый популярный вариант
+    pointsPerWin: 1, // сколько очков получает победитель раунда
     rollWords: ['+'], // слово участия в рулетке (символы разрешены)
-    rollAward: true, // победитель рулетки получает +1 очко
+    rollAward: true, // победитель рулетки получает очки
     allowRevote: false, // считается последнее слово зрителя
     timerEnabled: false, // таймер раунда выключен по умолчанию
     timerSeconds: 60,
@@ -458,15 +521,31 @@ function defaultSettings() {
 
 /** настройки из чего угодно -> рабочий набор (нужно и при загрузке копии) */
 function normalizeSettings(settings) {
-  const s = { ...defaultSettings(), ...(settings || {}) };
-  s.mode = normalizeMode(s.mode);
-  s.words = {
-    win: Array.isArray(s.words?.win) && s.words.win.length ? s.words.win.map((w) => normalizeWord(w)).filter(Boolean) : ['win'],
-    lose: Array.isArray(s.words?.lose) && s.words.lose.length ? s.words.lose.map((w) => normalizeWord(w)).filter(Boolean) : ['lose'],
-  };
-  if (!s.words.win.length) s.words.win = ['win'];
-  if (!s.words.lose.length) s.words.lose = ['lose'];
-  s.pollOptions = normalizePollOptions(s.pollOptions);
+  const raw = settings || {};
+  const s = { ...defaultSettings(), ...raw };
+  s.mode = normalizeMode(raw.mode);
+
+  // Старый режим «победа / поражение» убран. Если слова классики меняли,
+  // переносим их в варианты опроса, чтобы ничего не потерялось.
+  const legacyWin = Array.isArray(raw.words?.win)
+    ? raw.words.win.map((w) => normalizeWord(w)).filter(Boolean)
+    : [];
+  const legacyLose = Array.isArray(raw.words?.lose)
+    ? raw.words.lose.map((w) => normalizeWord(w)).filter(Boolean)
+    : [];
+  const legacyCustom =
+    legacyWin.length &&
+    legacyLose.length &&
+    !(legacyWin.length === 1 && legacyWin[0] === 'win' && legacyLose.length === 1 && legacyLose[0] === 'lose');
+  if ((raw.mode === 'classic' || !raw.mode) && legacyCustom) {
+    s.pollOptions = normalizePollOptions([{ words: legacyWin }, { words: legacyLose }]);
+  } else {
+    s.pollOptions = normalizePollOptions(s.pollOptions);
+  }
+  delete s.words;
+
+  s.pollAutoWinner = !!s.pollAutoWinner;
+  s.pointsPerWin = clampPoints(s.pointsPerWin);
   const rollWords = Array.isArray(s.rollWords) ? s.rollWords.map((w) => normalizeWord(w)).filter(Boolean) : [];
   s.rollWords = rollWords.length ? [...new Set(rollWords)] : ['+'];
   s.rollAward = s.rollAward !== false;
@@ -1117,14 +1196,16 @@ function outcomeLabel(round) {
 /** строки для листа «Раунды» */
 function exportRoundsRows(rounds, words) {
   const head = ['№', 'Режим', 'Начало', 'Голоса до', 'Итог', 'Голоса по вариантам', 'Всего голосов', 'Угадали'];
-  const rows = (rounds || []).map((r) => {
+  // раунд, который ещё не начинали, в выгрузку не попадает — у него нет ни голосов, ни времени
+  const started = (rounds || []).filter((r) => roundPhase(r) !== 'ready');
+  const rows = started.map((r) => {
     const votes = r.votes || [];
     const mode = roundMode(r);
     const guessed = r.outcome ? votes.filter((v) => v.vote === r.outcome).length : 0;
     return [
       r.index,
       modeLabel(mode),
-      dateTimeOf(r.openedAt),
+      dateTimeOf(r.openedAt) || '—',
       r.votesClosedAt ? dateTimeOf(r.votesClosedAt) : '—',
       outcomeLabel({ ...r, words: r.words || words }),
       votesBreakdown({ ...r, words: r.words || words }),
@@ -1381,6 +1462,7 @@ function timeOf(iso) {
 }
 
 function dateTimeOf(iso) {
+  if (!iso) return '';
   try {
     return new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
   } catch {
@@ -1438,6 +1520,10 @@ window.WVote = {
   normalizePollOptions,
   defaultPollOptions,
   classicOptions,
+  MAX_POLL_OPTIONS,
+  pollLeader,
+  clampPoints,
+  roundPoints,
   roundTimerSeconds,
   roundDeadline,
   roundTimeLeft,

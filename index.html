@@ -15,10 +15,10 @@
         <div class="logo"><span class="logo-mark">W</span><span class="logo-text">.VOTE</span></div>
         <h1>Голосование прямо в чате</h1>
         <p class="lead">
-          Зрители пишут в чат одно слово — например <b class="win">win</b> или <b class="lose">lose</b>.
-          Сайт считает голоса, а после раунда начисляет очко тем, кто угадал исход.
-          Три режима: <b>победа/поражение</b>, <b>опрос</b> с любыми вариантами и
-          <b>рулетка ников</b> — случайный победитель из тех, кто написал слово.
+          Зрители пишут в чат слово — например <b class="win">да</b> или <b>+</b>.
+          Сайт считает голоса и начисляет очки тем, кто угадал исход.
+          Два режима: <b>опрос</b> с любыми вариантами и <b>рулетка</b> —
+          случайный победитель из тех, кто написал слово.
         </p>
 
         <form id="channel-form" class="channel-form" autocomplete="off">
@@ -197,29 +197,24 @@
             </div>
 
             <div class="mode-tabs" role="tablist" aria-label="Режим раунда">
-              <button type="button" class="mode-tab" data-mode="classic" role="tab">
-                Победа / поражение
-              </button>
               <button type="button" class="mode-tab" data-mode="poll" role="tab">Опрос</button>
-              <button type="button" class="mode-tab" data-mode="roll" role="tab">Рулетка ников</button>
+              <button type="button" class="mode-tab" data-mode="roll" role="tab">Рулетка</button>
             </div>
-
-            <div class="mode-body" data-mode-body="classic">
-              <label class="field">
-                <span>Голос за победу (через запятую)</span>
-                <input id="words-win" type="text" placeholder="win" />
-              </label>
-              <label class="field">
-                <span>Голос за поражение (через запятую)</span>
-                <input id="words-lose" type="text" placeholder="lose" />
-              </label>
-              <p class="muted small" id="words-hint"></p>
-            </div>
+            <p class="mode-lock" id="mode-lock" hidden>
+              ⏸ Пока идёт приём, режим не переключить — сначала останови приём или дождись таймера.
+            </p>
 
             <div class="mode-body" data-mode-body="poll" hidden>
-              <span class="field-label">Варианты (до 6; через запятую — синонимы, первый — название)</span>
+              <div class="poll-head">
+                <span class="field-label">Варианты — до 100. Через запятую — синонимы, первый — название</span>
+                <span class="muted small" id="poll-count"></span>
+              </div>
               <div id="poll-options" class="poll-options"></div>
               <button type="button" id="poll-add" class="ghost-btn small-btn">+ добавить вариант</button>
+              <label class="switch poll-auto-row">
+                <input type="checkbox" id="poll-auto" />
+                <span>Победитель — вариант с наибольшим числом голосов</span>
+              </label>
               <p class="muted small" id="poll-hint"></p>
             </div>
 
@@ -230,10 +225,16 @@
               </label>
               <label class="switch">
                 <input type="checkbox" id="roll-award" />
-                <span>Победитель получает +1 очко в таблицу</span>
+                <span>Победитель получает очки в таблицу</span>
               </label>
               <p class="muted small" id="roll-hint"></p>
             </div>
+
+            <label class="field points-field">
+              <span>Сколько очков получает победитель раунда</span>
+              <input id="points-per-win" type="number" min="0" max="100" step="1" inputmode="numeric" />
+            </label>
+            <p class="muted small" id="points-hint"></p>
 
             <label class="switch" id="revote-row">
               <input type="checkbox" id="revote-toggle" />
@@ -317,19 +318,22 @@
           <div class="card rules-card">
             <div class="card-head"><h2>Как это работает</h2></div>
             <ol class="rules">
-              <li><b>Выбери режим</b>: победа/поражение, опрос или рулетка ников.</li>
-              <li><b>«Начать голосование»</b> — сообщения начинают считаться (например, пока идёт выбор героев).</li>
-              <li><b>«Остановить приём голосов»</b> — когда матч начался: голоса фиксируются, новые не считаются.
+              <li><b>Настрой раунд</b>: опрос с любыми вариантами или рулетка со случайным ником.</li>
+              <li><b>«Новый раунд»</b> — раунд создан, но сообщения пока не считаются:
+                можно спокойно поправить варианты, очки и таймер.</li>
+              <li><b>«Начать приём»</b> — с этой секунды сообщения из чата учитываются.
                 Если включён таймер, приём закроется сам.</li>
-              <li>Объяви исход: <b class="win">Была победа</b>, <b class="lose">Было поражение</b>,
-                вариант опроса или <b>«Крутить»</b> в рулетке.</li>
-              <li>Угадавшим +1 очко, победителю рулетки — тоже, если включено. Очки можно править вручную.</li>
+              <li><b>«Остановить приём»</b> — голоса фиксируются, новые не считаются.</li>
+              <li><b>Объяви итог</b>: вариант опроса или «Крутить» в рулетке. В опросе можно
+                включить «победитель по большинству» — тогда итог объявится сам.</li>
+              <li>Победители получают столько очков, сколько задано в настройке раунда.
+                Очки можно править вручную, а таблицу — выгрузить в Excel, CSV или TXT.</li>
             </ol>
             <p class="muted small">
               Передумал останавливать? Нажми «Возобновить приём голосов» — голоса снова пойдут.
             </p>
             <p class="muted small">
-              Слова-голоса можно писать в любом виде: <b>win</b>, <b>WIN!</b>, <b>:win:</b>, даже <b>+</b> —
+              Слово-голос можно писать в любом виде: <b>да</b>, <b>ДА!</b>, <b>:да:</b>, даже <b>+</b> —
               и в чате, и в поле настроек. Очки и настройки хранятся только у тебя в браузере:
               если открыть сайт на другом устройстве, таблица будет своя.
             </p>
